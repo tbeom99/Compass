@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>경사각 나침반 햅틱 시뮬레이터</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      background: #0f172a;
+      color: #f8fafc;
+      text-align: center;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+    .card {
+      background: #1e293b;
+      padding: 24px;
+      border-radius: 16px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+      max-width: 360px;
+      width: 100%;
+    }
+    h1 { font-size: 1.25rem; margin-bottom: 8px; }
+    p { font-size: 0.9rem; color: #94a3b8; margin-top: 0; }
+    .status-box {
+      margin: 20px 0;
+      padding: 16px;
+      background: #0f172a;
+      border-radius: 12px;
+      text-align: left;
+      font-family: monospace;
+      font-size: 0.85rem;
+      line-height: 1.6;
+    }
+    .meter-container {
+      width: 100%;
+      height: 16px;
+      background: #334155;
+      border-radius: 8px;
+      overflow: hidden;
+      margin: 15px 0;
+    }
+    .meter-bar {
+      width: 0%;
+      height: 100%;
+      background: #38bdf8;
+      transition: width 0.1s linear, background-color 0.2s ease;
+    }
+    button {
+      background: #38bdf8;
+      color: #0f172a;
+      border: none;
+      padding: 14px 20px;
+      font-size: 1rem;
+      font-weight: bold;
+      border-radius: 10px;
+      cursor: pointer;
+      width: 100%;
+    }
+    button:active { background: #0ea5e9; }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <h1>생물 모방 경사각 나침반</h1>
+    <p>북쪽 방향 및 지면 아래 54°(복각) 축과 정렬될수록 진동 주기가 짧아집니다.</p>
+
+    <button id="startBtn">센서 및 진동 시작하기</button>
+
+    <div class="meter-container">
+      <div id="meter" class="meter-bar"></div>
+    </div>
+
+    <div class="status-box">
+      <div>방위각 (Heading): <span id="headingVal">-</span>°</div>
+      <div>기울기 (Pitch): <span id="pitchVal">-</span>°</div>
+      <div>목표 각도 오차: <span id="diffVal">-</span>°</div>
+      <div>진동 세기: <span id="intensityVal">0</span>%</div>
+    </div>
+  </div>
+
+  <script>
+    const startBtn = document.getElementById('startBtn');
+    const headingVal = document.getElementById('headingVal');
+    const pitchVal = document.getElementById('pitchVal');
+    const diffVal = document.getElementById('diffVal');
+    const intensityVal = document.getElementById('intensityVal');
+    const meter = document.getElementById('meter');
+
+    // 한국 서울 기준 지자기 복각 (수평면 기준 아래로 약 54도)
+    const TARGET_PITCH = 54;
+    let currentIntensity = 0;
+    let vibrateLoop = null;
+
+    startBtn.addEventListener('click', async () => {
+      // 1. iOS Safari를 위한 센서 권한 요청
+      if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+        try {
+          const permission = await DeviceOrientationEvent.requestPermission();
+          if (permission !== 'granted') {
+            alert('센서 접근 권한이 거부되었습니다.');
+            return;
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      // 2. 모바일 브라우저 햅틱 활성화 (초기 사용자 탭 제스처 필요)
+      if ('vibrate' in navigator) {
+        navigator.vibrate(100);
+      } else {
+        alert('이 브라우저/기기는 진동 API를 지원하지 않습니다 (iOS Safari 등은 진동 미지원). Android Chrome을 권장합니다.');
+      }
+
+      startBtn.style.display = 'none';
+
+      // 3. 센서 이벤트 리스닝
+      window.addEventListener('deviceorientationabsolute', handleOrientation, true);
+      // fallback
+      window.addEventListener('deviceorientation', handleOrientation, true);
+
+      // 4. 진동 제어 루프 시작 (강도에 따라 펄스 간격 조절)
+      runHapticLoop();
+    });
+
+    function handleOrientation(event) {
+      // heading 계산 (Android Chrome / webkitCompassHeading 대응)
+      let heading = event.alpha;
+      if (event.webkitCompassHeading) {
+        heading = event.webkitCompassHeading; // iOS 기준
+      } else if (event.alpha !== null) {
+        heading = 360 - event.alpha; // Android 기준 보정
+      }
+
+      // pitch: 기기를 세우거나 숙이는 각도 (-90 ~ 90)
+      let pitch = event.beta;
+
+      if (heading === null || pitch === null) return;
+
+      // 1) 북쪽(0°/360°)과의 수평 각도 차이 (0 ~ 180도)
+      let headingDiff = Math.abs(heading);
+      if (headingDiff > 180) headingDiff = 360 - headingDiff;
+
+      // 2) 실제 복각(지면 아래 54°)과의 수직 각도 차이
+      // 기기를 앞쪽으로 54도 숙였을 때를 최적으로 설정
+      let pitchDiff = Math.abs(pitch - TARGET_PITCH);
+
+      // 3) 3D 공간 상의 총 벡터 각도 오차 근사치
+      let totalDiff = Math.sqrt(Math.pow(headingDiff, 2) + Math.pow(pitchDiff, 2));
+
+      // 4) 오차 범위(0° ~ 90°)를 100% ~ 0% 진동 강도로 매핑
+      let score = 0;
+      if (totalDiff < 90) {
+        score = Math.round((1 - (totalDiff / 90)) * 100);
+      }
+
+      currentIntensity = score;
+
+      // UI 업데이트
+      headingVal.innerText = Math.round(heading);
+      pitchVal.innerText = Math.round(pitch);
+      diffVal.innerText = Math.round(totalDiff);
+      intensityVal.innerText = currentIntensity;
+
+      meter.style.width = currentIntensity + '%';
+      if (currentIntensity > 80) {
+        meter.style.backgroundColor = '#ef4444'; // 초근접: 붉은색
+      } else if (currentIntensity > 50) {
+        meter.style.backgroundColor = '#f59e0b'; // 접근: 주황색
+      } else {
+        meter.style.backgroundColor = '#38bdf8'; // 기본: 파란색
+      }
+    }
+
+    // 진동 강도에 따라 펄스 간격을 조절하는 루프
+    function runHapticLoop() {
+      if ('vibrate' in navigator && currentIntensity > 15) {
+        // 가까울수록 진동 길이는 길어지고 대기 시간은 짧아짐
+        const pulseTime = Math.min(200, 30 + currentIntensity * 1.5);
+        navigator.vibrate(pulseTime);
+      }
+
+      // 강도(0~100)에 따라 다음 진동까지의 딜레이 조절 (100%일 때 약 80ms, 15%일 때 약 600ms)
+      const nextDelay = currentIntensity > 15 
+        ? Math.max(80, 700 - (currentIntensity * 6)) 
+        : 500;
+
+      setTimeout(runHapticLoop, nextDelay);
+    }
+  </script>
+</body>
+</html>
