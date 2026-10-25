@@ -101,12 +101,13 @@
             <div class="flex flex-wrap items-center gap-2">
                 <button id="btnSensorConnect" class="px-3.5 py-2 rounded-xl text-xs font-semibold bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white shadow-lg shadow-emerald-500/20 flex items-center gap-2 transition-all active:scale-95">
                     <span id="sensorDot" class="w-2 h-2 rounded-full bg-white animate-ping"></span>
-                    <span id="sensorBtnText">안드로이드 9축 센서 시작</span>
+                    <span id="sensorBtnText">모바일 9축 센서 시작</span>
                 </button>
                 <!-- Sensor Source Selector to prevent conflict -->
                 <select id="sensorSourceSelect" class="bg-slate-900 text-xs text-cyan-300 border border-slate-700 rounded-xl px-2.5 py-2 focus:outline-none focus:border-cyan-500">
-                    <option value="deviceorientationabsolute" selected>Android 절대 9축 (지자기 전용 &bull; 권장)</option>
-                    <option value="deviceorientation">Android 일반 방향센서</option>
+                    <option value="auto" selected>기기 자동 감지 (iOS/Android 최적화)</option>
+                    <option value="deviceorientationabsolute">Android 절대 9축 (지자기 전용)</option>
+                    <option value="deviceorientation">iOS / 일반 표준 방향센서</option>
                     <option value="websensor">WebSensor (Generic Sensor)</option>
                 </select>
                 <button id="btnAudioToggle" class="px-3.5 py-2 rounded-xl text-xs font-semibold bg-indigo-950/90 hover:bg-indigo-900 text-indigo-300 border border-indigo-500/40 flex items-center gap-1.5 transition-all active:scale-95 shadow-lg shadow-indigo-500/10">
@@ -528,7 +529,7 @@
             rawRoll: 0,
             filterAlpha: 0.15, // Low pass filter factor (0.05 = super smooth, 0.9 = fast/jittery)
             activeSensorType: null, // Strictly tracks the SINGLE active sensor to prevent any racing
-            userSelectedSource: 'deviceorientationabsolute', // Default directly to absolute 9-axis
+            userSelectedSource: 'auto', // 'auto' detects iOS vs Android automatically
             dipAngle: 54,     // Local Earth Magnetic Inclination (Seoul = +54° downward into earth)
             invertBz: false,  // Helmholtz coil vertical magnetic field inversion experiment
             polarityBlind: true, // true = Biomimetic Axial Mode (B == -B), false = Classical N-only mode
@@ -1687,7 +1688,21 @@
             unbindAllSensors();
 
             const thisTicket = currentSensorSessionId;
-            let targetSource = preferredSource || 'deviceorientationabsolute';
+            let targetSource = preferredSource || state.userSelectedSource || 'auto';
+
+            // Device Platform Detection (iOS vs Android)
+            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+                          (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+            if (targetSource === 'auto') {
+                if (isIOS) {
+                    targetSource = 'deviceorientation'; // iOS only supports standard deviceorientation
+                } else if ('ondeviceorientationabsolute' in window) {
+                    targetSource = 'deviceorientationabsolute'; // Android Chrome with magnetometer
+                } else {
+                    targetSource = 'deviceorientation';
+                }
+            }
 
             if (targetSource === 'websensor' && 'AbsoluteOrientationSensor' in window) {
                 try {
@@ -1716,14 +1731,14 @@
                     state.activeSensorType = 'websensor';
                     return;
                 } catch (_) {
-                    targetSource = 'deviceorientationabsolute';
+                    targetSource = isIOS ? 'deviceorientation' : 'deviceorientationabsolute';
                 }
             }
 
-            // Standard Android DeviceOrientation Binding
+            // Standard Mobile Orientation Binding (Handles both iOS webkitCompassHeading & Android absolute)
             const isAbsolute = (targetSource === 'deviceorientationabsolute');
             const eventName = isAbsolute ? 'deviceorientationabsolute' : 'deviceorientation';
-            const label = isAbsolute ? 'Android 절대 9축' : 'Android 방향센서';
+            const label = isIOS ? 'iOS Safari 나침반' : (isAbsolute ? 'Android 절대 9축' : 'Android 방향센서');
 
             activeEventName = eventName;
             activeHandler = function(event) {
@@ -1731,9 +1746,13 @@
                 if (event.alpha === null && event.beta === null && event.gamma === null) return;
 
                 let targetYaw = state.yaw;
+                
+                // 1. iOS Safari: webkitCompassHeading directly provides True/Magnetic North heading (0° = North, 90° = East)
                 if (typeof event.webkitCompassHeading === 'number') {
                     targetYaw = event.webkitCompassHeading;
-                } else if (typeof event.alpha === 'number') {
+                } 
+                // 2. Android absolute orientation: alpha is counter-clockwise, invert to clockwise compass heading
+                else if (typeof event.alpha === 'number') {
                     targetYaw = (360 - event.alpha) % 360;
                 }
 
@@ -1755,18 +1774,25 @@
 
         btnSensorConnect.addEventListener('click', async () => {
             try {
+                // iOS 13+ Safari explicit user permission request
                 if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
                     const permission = await DeviceOrientationEvent.requestPermission();
                     if (permission === 'granted') {
-                        bindExclusiveSensor(state.userSelectedSource);
+                        setDiagnosticStatus('iOS 권한 승인됨', 'emerald', 'iOS 지자기 나침반 센서가 활성화되었습니다.');
+                        bindExclusiveSensor('auto');
                     } else {
-                        setDiagnosticStatus('권한 거부됨', 'rose', '센서 접근이 거부되었습니다. 화면 터치 드래그를 이용해주세요.');
+                        setDiagnosticStatus('권한 거부됨', 'rose', '아이폰 [설정 > Safari > 동작 및 방향 접근] 권한을 허용해주세요.');
                     }
                 } else {
-                    bindExclusiveSensor(state.userSelectedSource);
+                    bindExclusiveSensor('auto');
                 }
-            } catch (_) {
-                bindExclusiveSensor(state.userSelectedSource);
+            } catch (err) {
+                // Typical iOS non-https error: SecurityError
+                if (err && err.name === 'SecurityError') {
+                    setDiagnosticStatus('HTTPS 연결 필요', 'rose', 'iOS는 보안 정책상 https:// 주소에서만 센서 접근이 가능합니다.');
+                } else {
+                    bindExclusiveSensor('auto');
+                }
             }
 
             const startCount = state.sensorPackets;
@@ -1775,9 +1801,9 @@
             setTimeout(() => {
                 if (state.sensorPackets === startCount) {
                     setDiagnosticStatus(
-                        'iframe 센서 차단 감지',
-                        'rose',
-                        '프리뷰 창의 보안 정책으로 인해 센서 이벤트가 차단되었습니다. 화면 중앙의 매트릭스나 3D 구를 손가락으로 드래그하면 스마트폰 회전과 100% 동일하게 부드럽게 조작됩니다.'
+                        '센서 패킷 대기 중',
+                        'amber',
+                        '센서 데이터가 감지되지 않으면 상단 [모바일 9축 센서 시작] 버튼을 다시 탭하거나, 화면을 손가락으로 드래그해 조작하세요.'
                     );
                 }
             }, 1000);
@@ -1791,8 +1817,8 @@
             initHapticGrid();
             syncSlidersToUI();
             updateSimulation();
-            // Start single exclusive sensor without racing
-            bindExclusiveSensor(state.userSelectedSource);
+            // Start single exclusive sensor without racing (Auto-detect iOS / Android)
+            bindExclusiveSensor('auto');
         };
     </script>
 </body>
