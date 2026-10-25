@@ -1,201 +1,1761 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="ko" class="dark">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>경사각 나침반 햅틱 시뮬레이터</title>
-  <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      margin: 0;
-      background: #0f172a;
-      color: #f8fafc;
-      text-align: center;
-      padding: 20px;
-      box-sizing: border-box;
-    }
-    .card {
-      background: #1e293b;
-      padding: 24px;
-      border-radius: 16px;
-      box-shadow: 0 10px 25px rgba(0,0,0,0.5);
-      max-width: 360px;
-      width: 100%;
-    }
-    h1 { font-size: 1.25rem; margin-bottom: 8px; }
-    p { font-size: 0.9rem; color: #94a3b8; margin-top: 0; }
-    .status-box {
-      margin: 20px 0;
-      padding: 16px;
-      background: #0f172a;
-      border-radius: 12px;
-      text-align: left;
-      font-family: monospace;
-      font-size: 0.85rem;
-      line-height: 1.6;
-    }
-    .meter-container {
-      width: 100%;
-      height: 16px;
-      background: #334155;
-      border-radius: 8px;
-      overflow: hidden;
-      margin: 15px 0;
-    }
-    .meter-bar {
-      width: 0%;
-      height: 100%;
-      background: #38bdf8;
-      transition: width 0.1s linear, background-color 0.2s ease;
-    }
-    button {
-      background: #38bdf8;
-      color: #0f172a;
-      border: none;
-      padding: 14px 20px;
-      font-size: 1rem;
-      font-weight: bold;
-      border-radius: 10px;
-      cursor: pointer;
-      width: 100%;
-    }
-    button:active { background: #0ea5e9; }
-  </style>
-</head>
-<body>
-
-  <div class="card">
-    <h1>생물 모방 경사각 나침반</h1>
-    <p>북쪽 방향 및 지면 아래 54°(복각) 축과 정렬될수록 진동 주기가 짧아집니다.</p>
-
-    <button id="startBtn">센서 및 진동 시작하기</button>
-
-    <div class="meter-container">
-      <div id="meter" class="meter-bar"></div>
-    </div>
-
-    <div class="status-box">
-      <div>방위각 (Heading): <span id="headingVal">-</span>°</div>
-      <div>기울기 (Pitch): <span id="pitchVal">-</span>°</div>
-      <div>목표 각도 오차: <span id="diffVal">-</span>°</div>
-      <div>진동 세기: <span id="intensityVal">0</span>%</div>
-    </div>
-  </div>
-
-  <script>
-    const startBtn = document.getElementById('startBtn');
-    const headingVal = document.getElementById('headingVal');
-    const pitchVal = document.getElementById('pitchVal');
-    const diffVal = document.getElementById('diffVal');
-    const intensityVal = document.getElementById('intensityVal');
-    const meter = document.getElementById('meter');
-
-    // 한국 서울 기준 지자기 복각 (수평면 기준 아래로 약 54도)
-    const TARGET_PITCH = 54;
-    let currentIntensity = 0;
-    let vibrateLoop = null;
-
-    startBtn.addEventListener('click', async () => {
-      // 1. iOS Safari를 위한 센서 권한 요청
-      if (typeof DeviceOrientationEvent.requestPermission === 'function') {
-        try {
-          const permission = await DeviceOrientationEvent.requestPermission();
-          if (permission !== 'granted') {
-            alert('센서 접근 권한이 거부되었습니다.');
-            return;
-          }
-        } catch (e) {
-          console.error(e);
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>경사각 나침반 2D 햅틱 매트릭스 시뮬레이터</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: #070b14;
+            color: #e2e8f0;
+            overflow-x: hidden;
         }
-      }
+        .mono {
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .math-vec {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0f172a;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 3px;
+        }
+        /* Vibration animation for active LRA nodes */
+        @keyframes haptic-pulse {
+            0%, 100% { transform: scale(1); }
+            25% { transform: scale(1.06) translate(1px, -1px); }
+            50% { transform: scale(1.03) translate(-1px, 1px); }
+            75% { transform: scale(1.06) translate(1px, 1px); }
+        }
+        .lra-active {
+            animation: haptic-pulse 0.12s infinite ease-in-out;
+        }
+        /* Range Slider Styling */
+        input[type=range] {
+            -webkit-appearance: none;
+            background: transparent;
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 6px;
+            cursor: pointer;
+            background: #1e293b;
+            border-radius: 4px;
+            border: 1px solid #334155;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            height: 18px;
+            width: 18px;
+            border-radius: 50%;
+            background: #38bdf8;
+            cursor: pointer;
+            -webkit-appearance: none;
+            margin-top: -7px;
+            box-shadow: 0 0 10px rgba(56, 189, 248, 0.6);
+            transition: transform 0.1s;
+        }
+        input[type=range]::-webkit-slider-thumb:hover {
+            transform: scale(1.15);
+        }
+        .grid-bg {
+            background-image: radial-gradient(rgba(56, 189, 248, 0.12) 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+    </style>
+</head>
+<body class="min-h-screen grid-bg selection:bg-sky-500 selection:text-white pb-12">
 
-      // 2. 모바일 브라우저 햅틱 활성화 (초기 사용자 탭 제스처 필요)
-      if ('vibrate' in navigator) {
-        navigator.vibrate(100);
-      } else {
-        alert('이 브라우저/기기는 진동 API를 지원하지 않습니다 (iOS Safari 등은 진동 미지원). Android Chrome을 권장합니다.');
-      }
+    <!-- Top Header -->
+    <header class="border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-md sticky top-0 z-30">
+        <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/20">
+                    <!-- Biomimetic Compass Icon -->
+                    <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 0v20m-7-7l7-7 7 7" />
+                    </svg>
+                </div>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <h1 class="text-base sm:text-lg font-bold tracking-tight text-white">BIO-HAPTIC INCLINATION MATRIX</h1>
+                        <span class="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 rounded-full mono">Cryptochrome Model</span>
+                    </div>
+                    <p class="text-xs text-slate-400">생물모방 경사각 나침반 2D 촉각 매트릭스 &amp; 극성 맹목성(<span class="math-vec text-cyan-300">B&#8407; &equiv; &minus;B&#8407;</span>) 시뮬레이터</p>
+                </div>
+            </div>
 
-      startBtn.style.display = 'none';
+            <!-- Sensor Controls -->
+            <div class="flex flex-wrap items-center gap-2">
+                <button id="btnSensorConnect" class="px-3.5 py-2 rounded-xl text-xs font-semibold bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white shadow-lg shadow-emerald-500/20 flex items-center gap-2 transition-all active:scale-95">
+                    <span id="sensorDot" class="w-2 h-2 rounded-full bg-white animate-ping"></span>
+                    <span id="sensorBtnText">안드로이드 9축 센서 시작</span>
+                </button>
+                <!-- Sensor Source Selector to prevent conflict -->
+                <select id="sensorSourceSelect" class="bg-slate-900 text-xs text-cyan-300 border border-slate-700 rounded-xl px-2.5 py-2 focus:outline-none focus:border-cyan-500">
+                    <option value="deviceorientationabsolute" selected>Android 절대 9축 (지자기 전용 &bull; 권장)</option>
+                    <option value="deviceorientation">Android 일반 방향센서</option>
+                    <option value="websensor">WebSensor (Generic Sensor)</option>
+                </select>
+                <button id="btnAudioToggle" class="px-3.5 py-2 rounded-xl text-xs font-semibold bg-indigo-950/90 hover:bg-indigo-900 text-indigo-300 border border-indigo-500/40 flex items-center gap-1.5 transition-all active:scale-95 shadow-lg shadow-indigo-500/10">
+                    <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                    </svg>
+                    <span id="audioBtnText">3D 공간 음향: OFF</span>
+                </button>
+            </div>
+        </div>
+    </header>
 
-      // 3. 센서 이벤트 리스닝
-      window.addEventListener('deviceorientationabsolute', handleOrientation, true);
-      // fallback
-      window.addEventListener('deviceorientation', handleOrientation, true);
+    <!-- Status / Diagnostics Banner -->
+    <div id="statusBanner" class="max-w-7xl mx-auto px-4 mt-3">
+        <div class="px-4 py-2.5 rounded-xl bg-slate-900/95 border border-cyan-500/40 text-xs text-cyan-200 flex flex-wrap items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+                <span id="diagBadge" class="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold mono text-[10px]">대기 중</span>
+                <span id="statusMessage">안드로이드 센서 대기 중입니다. 상단 [안드로이드 9축 센서 시작] 버튼을 누르거나, 매트릭스/3D 구체를 손가락으로 직접 드래그해 보세요!</span>
+            </div>
+            <div class="flex items-center gap-3 ml-auto">
+                <span id="sensorPacketCounter" class="mono text-[11px] text-slate-400">수신 패킷: 0</span>
+                <button onclick="document.getElementById('statusBanner').classList.add('hidden')" class="text-slate-400 hover:text-white">✕</button>
+            </div>
+        </div>
+    </div>
 
-      // 4. 진동 제어 루프 시작 (강도에 따라 펄스 간격 조절)
-      runHapticLoop();
-    });
+    <!-- Main Content Layout -->
+    <main class="max-w-7xl mx-auto px-4 mt-4 grid grid-cols-1 lg:grid-cols-12 gap-6">
 
-    function handleOrientation(event) {
-      // heading 계산 (Android Chrome / webkitCompassHeading 대응)
-      let heading = event.alpha;
-      if (event.webkitCompassHeading) {
-        heading = event.webkitCompassHeading; // iOS 기준
-      } else if (event.alpha !== null) {
-        heading = 360 - event.alpha; // Android 기준 보정
-      }
+        <!-- Left / Center Column: 2D Haptic Matrix & Biological Explanation (7 cols) -->
+        <div class="lg:col-span-7 flex flex-col gap-6">
 
-      // pitch: 기기를 세우거나 숙이는 각도 (-90 ~ 90)
-      let pitch = event.beta;
+            <!-- 2D Haptic Matrix Card -->
+            <section class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-6 shadow-2xl relative overflow-hidden">
+                <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+                    <div>
+                        <h2 class="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+                            <span class="w-2.5 h-2.5 rounded-full bg-cyan-400"></span>
+                            가슴/몸통 전방위 2D 햅틱 매트릭스 (12 &times; 7 LRA Array)
+                        </h2>
+                        <p class="text-xs text-slate-400 mt-0.5">
+                            가로축: 몸통 둘레 방위각 (&minus;180&deg; ~ +180&deg;) | 세로축: 몸통 수직 고도각 (+90&deg; ~ &minus;90&deg;)
+                        </p>
+                    </div>
 
-      if (heading === null || pitch === null) return;
+                    <!-- Mode Switch: Polarity-Blind (Bio) vs Polarity-Aware (Classical) -->
+                    <div class="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800">
+                        <button id="modeBioBtn" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 transition-all">
+                            생물학적 축 모드 (B&#8407; &equiv; &minus;B&#8407;)
+                        </button>
+                        <button id="modeClassicalBtn" class="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-slate-200 transition-all">
+                            일반 극성 나침반 (+B&#8407; 단일)
+                        </button>
+                    </div>
+                </div>
 
-      // 1) 북쪽(0°/360°)과의 수평 각도 차이 (0 ~ 180도)
-      let headingDiff = Math.abs(heading);
-      if (headingDiff > 180) headingDiff = 360 - headingDiff;
+                <!-- Legend Bar -->
+                <div class="flex flex-wrap items-center justify-between gap-3 text-[11px] bg-slate-950/70 px-3.5 py-2 rounded-xl border border-slate-800/80 mb-4">
+                    <div class="flex items-center gap-4 flex-wrap">
+                        <div class="flex items-center gap-1.5">
+                            <span class="w-3 h-3 rounded-full bg-cyan-400 shadow-[0_0_8px_#22d3ee] inline-block"></span>
+                            <span class="text-slate-300"><strong>자기장 관통축 (2개 대칭점):</strong> 극성 구분 불가로 입사점·출사점 동시 진동</span>
+                        </div>
+                        <div class="flex items-center gap-1.5">
+                            <span class="w-4 h-0.5 bg-amber-400 inline-block"></span>
+                            <span class="text-amber-300"><strong>중력 수평선 (<span class="math-vec">g&#8407;</span> 기준):</strong> 선 아래쪽(땅 방향)에 위치한 진동점이 <strong>극방향(북쪽)</strong></span>
+                        </div>
+                    </div>
+                    <span class="text-[10px] text-cyan-400/90 font-medium">💡 매트릭스 위를 손가락으로 드래그하면 방향·기울기가 즉시 회전합니다</span>
+                </div>
 
-      // 2) 실제 복각(지면 아래 54°)과의 수직 각도 차이
-      // 기기를 앞쪽으로 54도 숙였을 때를 최적으로 설정
-      let pitchDiff = Math.abs(pitch - TARGET_PITCH);
+                <!-- Matrix Wrapper with Overlay Canvas for Gravity Horizon Line & Labels -->
+                <div id="matrixTouchArea" class="relative select-none bg-slate-950 rounded-xl border border-slate-800 p-3 sm:p-5 overflow-hidden touch-none cursor-grab active:cursor-grabbing">
+                    
+                    <!-- Top Azimuth Labels -->
+                    <div class="grid grid-cols-12 text-center text-[10px] mono text-slate-400 mb-2 border-b border-slate-800/80 pb-1.5">
+                        <div>-165&deg;<br><span class="text-[9px] text-slate-600">등(좌)</span></div>
+                        <div>-135&deg;</div>
+                        <div>-105&deg;<br><span class="text-[9px] text-slate-500">좌측면</span></div>
+                        <div>-75&deg;</div>
+                        <div>-45&deg;</div>
+                        <div class="text-cyan-400 font-bold">-15&deg;<br><span class="text-[9px]">정면(좌)</span></div>
+                        <div class="text-cyan-400 font-bold">+15&deg;<br><span class="text-[9px]">정면(우)</span></div>
+                        <div>+45&deg;</div>
+                        <div>+75&deg;</div>
+                        <div>+105&deg;<br><span class="text-[9px] text-slate-500">우측면</span></div>
+                        <div>+135&deg;</div>
+                        <div>+165&deg;<br><span class="text-[9px] text-slate-600">등(우)</span></div>
+                    </div>
 
-      // 3) 3D 공간 상의 총 벡터 각도 오차 근사치
-      let totalDiff = Math.sqrt(Math.pow(headingDiff, 2) + Math.pow(pitchDiff, 2));
+                    <div class="relative flex">
+                        <!-- Left Elevation Labels -->
+                        <div class="flex flex-col justify-between text-[10px] mono text-slate-400 pr-2 py-2 border-r border-slate-800/80 mr-2 text-right w-12 shrink-0">
+                            <div class="text-sky-300">+90&deg;<div class="text-[8px] text-slate-500">머리위</div></div>
+                            <div>+60&deg;</div>
+                            <div>+30&deg;</div>
+                            <div class="text-amber-400 font-bold">0&deg;<div class="text-[8px]">몸통수평</div></div>
+                            <div>-30&deg;</div>
+                            <div>-60&deg;</div>
+                            <div class="text-emerald-400">-90&deg;<div class="text-[8px] text-slate-500">발아래</div></div>
+                        </div>
 
-      // 4) 오차 범위(0° ~ 90°)를 100% ~ 0% 진동 강도로 매핑
-      let score = 0;
-      if (totalDiff < 90) {
-        score = Math.round((1 - (totalDiff / 90)) * 100);
-      }
+                        <!-- 12 x 7 Haptic Grid Container -->
+                        <div class="relative flex-1">
+                            <div id="hapticGrid" class="grid grid-cols-12 gap-1 sm:gap-2 relative z-10">
+                                <!-- Generated dynamically via JS: 84 LRA Nodes -->
+                            </div>
 
-      currentIntensity = score;
+                            <!-- Overlay Canvas for Gravity Horizon Curve & Axis Annotations -->
+                            <canvas id="matrixOverlayCanvas" class="absolute inset-0 w-full h-full pointer-events-none z-20"></canvas>
+                        </div>
+                    </div>
 
-      // UI 업데이트
-      headingVal.innerText = Math.round(heading);
-      pitchVal.innerText = Math.round(pitch);
-      diffVal.innerText = Math.round(totalDiff);
-      intensityVal.innerText = currentIntensity;
+                    <!-- Center Torso Front Guide Bar -->
+                    <div class="mt-3 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
+                        <span>&#9664; 등 뒤 (Back &minus;180&deg;)</span>
+                        <span class="text-cyan-400 font-semibold">&#9650; 가슴 정면 시선 방향 (Front 0&deg;) &#9650;</span>
+                        <span>등 뒤 (Back +180&deg;) &#9654;</span>
+                    </div>
+                </div>
 
-      meter.style.width = currentIntensity + '%';
-      if (currentIntensity > 80) {
-        meter.style.backgroundColor = '#ef4444'; // 초근접: 붉은색
-      } else if (currentIntensity > 50) {
-        meter.style.backgroundColor = '#f59e0b'; // 접근: 주황색
-      } else {
-        meter.style.backgroundColor = '#38bdf8'; // 기본: 파란색
-      }
-    }
+                <!-- Live Biological Interpretation Box -->
+                <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div class="bg-slate-950/90 border border-cyan-500/30 rounded-xl p-3.5 flex items-start gap-3">
+                        <div class="w-8 h-8 rounded-lg bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center shrink-0 text-cyan-300 font-bold mono text-xs">
+                            축 1
+                        </div>
+                        <div class="text-xs">
+                            <div class="font-bold text-cyan-300 flex items-center gap-1.5 flex-wrap">
+                                <span>지면 관통 축 (Poleward / 극방향)</span>
+                                <span id="polewardBadge" class="px-1.5 py-0.5 text-[10px] bg-cyan-500/20 rounded text-cyan-200 mono">--</span>
+                            </div>
+                            <p id="polewardDesc" class="text-slate-400 mt-1 leading-relaxed">
+                                중력 수평선(노란선) <strong>아래쪽(땅 방향)</strong>으로 꽂히는 자기장 축입니다. 뇌는 이 진동점이 위치한 방위를 <strong>북쪽(자북극 방향)</strong>으로 인식합니다.
+                            </p>
+                        </div>
+                    </div>
 
-    // 진동 강도에 따라 펄스 간격을 조절하는 루프
-    function runHapticLoop() {
-      if ('vibrate' in navigator && currentIntensity > 15) {
-        // 가까울수록 진동 길이는 길어지고 대기 시간은 짧아짐
-        const pulseTime = Math.min(200, 30 + currentIntensity * 1.5);
-        navigator.vibrate(pulseTime);
-      }
+                    <div class="bg-slate-950/90 border border-fuchsia-500/30 rounded-xl p-3.5 flex items-start gap-3">
+                        <div class="w-8 h-8 rounded-lg bg-fuchsia-500/20 border border-fuchsia-500/40 flex items-center justify-center shrink-0 text-fuchsia-300 font-bold mono text-xs">
+                            축 2
+                        </div>
+                        <div class="text-xs">
+                            <div class="font-bold text-fuchsia-300 flex items-center gap-1.5 flex-wrap">
+                                <span>하늘 솟구침 축 (Equatorward / 적도방향)</span>
+                                <span id="equatorwardBadge" class="px-1.5 py-0.5 text-[10px] bg-fuchsia-500/20 rounded text-fuchsia-200 mono">--</span>
+                            </div>
+                            <p id="equatorwardDesc" class="text-slate-400 mt-1 leading-relaxed">
+                                극성 구분이 불가능해 180&deg; 반대편에 동일 강도로 생기는 대칭 진동점입니다. 중력 수평선 <strong>위쪽(하늘 방향)</strong>에 있으므로 <strong>남쪽(적도 방향)</strong>으로 해석됩니다.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </section>
 
-      // 강도(0~100)에 따라 다음 진동까지의 딜레이 조절 (100%일 때 약 80ms, 15%일 때 약 600ms)
-      const nextDelay = currentIntensity > 15 
-        ? Math.max(80, 700 - (currentIntensity * 6)) 
-        : 500;
+            <!-- Cryptochrome Radical-Pair Yield & Scientific Principle Card -->
+            <section class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-6 shadow-xl">
+                <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+                    <h3 class="text-sm font-bold text-white flex items-center gap-2">
+                        <svg class="w-4 h-4 text-cyan-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                        </svg>
+                        <span>왜 극성을 구분하지 못할까? &mdash; 라디칼 쌍 메커니즘 (<span class="math-vec text-cyan-300">&Phi;<sub>S</sub> &prop; cos&sup2;&theta;</span>)</span>
+                    </h3>
+                    <span class="text-xs mono text-cyan-400" id="singletYieldText">Singlet Yield: --</span>
+                </div>
 
-      setTimeout(runHapticLoop, nextDelay);
-    }
-  </script>
+                <p class="text-xs text-slate-300 leading-relaxed mb-4">
+                    철새의 망막 속 <strong>크립토크롬(Cryptochrome)</strong> 단백질은 빛을 받아 전자 쌍(Radical Pair)을 형성합니다. 이 전자 스핀들이 단일항(Singlet)과 삼중항(Triplet) 사이를 진동하는 비율은 자기장 벡터 <span class="math-vec text-cyan-300">B&#8407;</span>와 단백질 축 <span class="math-vec text-cyan-300">n&#770;</span>이 이루는 각도 &theta;의 <strong>cos&sup2;&theta;</strong>에 비례합니다. 
+                    수학적으로 <strong>cos&sup2;(&theta;) = cos&sup2;(180&deg; &minus; &theta;)</strong> 이므로, 자기장 화살표가 앞으로 향하든(<span class="math-vec">+B&#8407;</span>) 뒤로 향하든(<span class="math-vec">&minus;B&#8407;</span>) 생화학적 신호 강도는 <strong>100% 동일</strong>합니다. 따라서 생물(그리고 이 햅틱 매트릭스)은 <strong>중력 센서(전정기관/가속도계)가 알려주는 '지면 아래 방향(<span class="math-vec text-amber-300">g&#8407;</span>)'과 자기장 축이 만나는 쪽</strong>을 찾아 방위를 판별합니다.
+                </p>
+
+                <!-- Singlet Yield Bar Graph -->
+                <div class="bg-slate-950 rounded-xl p-3 border border-slate-800">
+                    <div class="flex justify-between text-[11px] mono text-slate-400 mb-1.5 flex-wrap gap-1">
+                        <span>정면 시선축(n&#770;<sub>front</sub>)과 자기장 축(&plusmn;B&#8407;)의 사잇각 &theta;: <strong id="angleThetaVal" class="text-white">54.0&deg;</strong></span>
+                        <span>공명 진동 출력 (cos&sup2;&theta;): <strong id="cosSqVal" class="text-cyan-400">34.5%</strong></span>
+                    </div>
+                    <div class="w-full h-3 bg-slate-800 rounded-full overflow-hidden p-0.5">
+                        <div id="yieldProgressBar" class="h-full bg-gradient-to-r from-cyan-500 via-sky-400 to-fuchsia-500 rounded-full transition-all duration-75" style="width: 35%"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 3D Spatial Audio (HRTF) Headphone Sonar Panel -->
+            <section class="bg-slate-900/90 border border-indigo-500/30 rounded-2xl p-4 sm:p-6 shadow-xl relative overflow-hidden">
+                <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+                    <div class="flex items-center gap-2.5">
+                        <div class="w-8 h-8 rounded-lg bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-indigo-300">
+                            🎧
+                        </div>
+                        <div>
+                            <h3 class="text-sm font-bold text-white flex items-center gap-2">
+                                <span>3D 공간 음향 (HRTF Binaural Audio) 자기장 소나</span>
+                                <span id="audioStatusBadge" class="px-2 py-0.5 text-[10px] rounded bg-slate-800 text-slate-400 mono">대기 중</span>
+                            </h3>
+                            <p class="text-[11px] text-slate-400">이어폰/헤드셋 착용 시 자기장이 꽂히는 3차원 방향(전후좌우·상하)에서 소리가 들립니다</p>
+                        </div>
+                    </div>
+                    <button id="btnAudioPanelToggle" class="px-3 py-1.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 transition-all">
+                        🎧 공간 음향 켜기
+                    </button>
+                </div>
+
+                <!-- Audio Controls & Mode Explanations -->
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
+                    <!-- Sound Mode Selector -->
+                    <div class="bg-slate-950/90 border border-slate-800 rounded-xl p-3">
+                        <div class="text-[11px] font-semibold text-indigo-300 mb-2">음향 매핑 모드 선택</div>
+                        <div class="flex flex-col gap-1.5">
+                            <label class="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                                <input type="radio" name="audioMode" value="dual" checked class="accent-cyan-400">
+                                <span><strong>양축 공명 (극방향+적도축)</strong></span>
+                            </label>
+                            <label class="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                                <input type="radio" name="audioMode" value="poleward" class="accent-cyan-400">
+                                <span><strong>극방향(땅쪽 북극) 단일 추적</strong></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Acoustic Cues Explanation -->
+                    <div class="bg-slate-950/90 border border-slate-800 rounded-xl p-3 sm:col-span-2 flex flex-col justify-between">
+                        <div class="grid grid-cols-2 gap-2 text-[11px]">
+                            <div>
+                                <span class="text-cyan-400 font-bold">● 극방향 (땅으로 꽂히는 축):</span>
+                                <p class="text-slate-400 mt-0.5">따뜻한 저음역(196Hz) 맥동음 &mdash; <strong>중력 아래 방향</strong>과 결합되어 어둡고 묵직한 음색</p>
+                            </div>
+                            <div>
+                                <span class="text-fuchsia-400 font-bold">● 적도방향 (하늘로 솟는 축):</span>
+                                <p class="text-slate-400 mt-0.5">투명한 고음역(587Hz) 배음 &mdash; <strong>하늘 방향</strong> 고도에 맞춰 밝은 필터 개방</p>
+                            </div>
+                        </div>
+                        <div class="mt-2 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] mono">
+                            <span class="text-slate-400">시선 정면 정렬 공명도: <strong id="audioLockVal" class="text-indigo-300">34%</strong></span>
+                            <span id="audioPanInfo" class="text-cyan-300">좌우 Pan: 정면 (0.00)</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- Right Column: 3D Vector HUD & Manual Simulation Controls (5 cols) -->
+        <div class="lg:col-span-5 flex flex-col gap-6">
+
+            <!-- 3D Spatial Vector Visualizer Card -->
+            <section class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl">
+                <div class="flex items-center justify-between mb-3">
+                    <div>
+                        <h2 class="text-sm font-bold text-white">3D 지구 기준계 뷰 (지면&middot;자기장 고정 &amp; 폰 회전)</h2>
+                        <p class="text-[11px] text-slate-400">지표면과 자기장은 고정되고, 내 폰(시선)이 공간에서 실시간 회전</p>
+                    </div>
+                    <span id="compassHeadingBadge" class="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-700 text-xs mono font-bold text-cyan-400">
+                        방위: 0&deg; (N)
+                    </span>
+                </div>
+
+                <!-- 3D Vector Canvas -->
+                <div id="sphereTouchArea" class="relative bg-slate-950 rounded-xl border border-slate-800 overflow-hidden h-64 flex items-center justify-center touch-none cursor-grab active:cursor-grabbing">
+                    <canvas id="vector3DCanvas" class="w-full h-full block"></canvas>
+                    <div class="absolute top-2 left-3 right-3 flex justify-between text-[10px] mono text-slate-500 pointer-events-none">
+                        <span>👆 화면 드래그로 폰 회전/기울기 조작</span>
+                        <span id="sensorSourceLabel" class="text-cyan-400 font-semibold">모드: 터치/슬라이더</span>
+                    </div>
+                    <div class="absolute bottom-2 left-3 right-3 flex justify-between text-[10px] mono text-slate-400 pointer-events-none">
+                        <span class="text-cyan-400">━━ &plusmn;B&#8407; 자기장 (지구 고정)</span>
+                        <span class="text-amber-400">━━ g&#8407; 중력아래 (고정)</span>
+                        <span class="text-emerald-400">━━ &#128241; 폰 시선 (+Y)</span>
+                    </div>
+                </div>
+
+                <!-- Sensor Filter Tuning & Telemetry Grid -->
+                <div class="flex items-center justify-between text-[11px] bg-slate-950/80 px-3 py-1.5 rounded-xl border border-slate-800 mt-2">
+                    <span class="text-slate-400">센서 노이즈 필터 (흔들림 보정):</span>
+                    <div class="flex items-center gap-2">
+                        <span id="filterValText" class="mono text-cyan-400 font-bold">부드럽게 (80%)</span>
+                        <input id="sliderFilter" type="range" min="0.05" max="0.95" step="0.05" value="0.20" class="w-20">
+                    </div>
+                </div>
+
+                <!-- Telemetry Grid -->
+                <div class="grid grid-cols-3 gap-2 mt-2 text-center mono">
+                    <div class="bg-slate-950 p-2 rounded-xl border border-slate-800">
+                        <div class="text-[10px] text-slate-400">극방향 방위 (Azimuth)</div>
+                        <div id="telAzimuth" class="text-sm font-bold text-cyan-400 mt-0.5">0.0&deg;</div>
+                    </div>
+                    <div class="bg-slate-950 p-2 rounded-xl border border-slate-800">
+                        <div class="text-[10px] text-slate-400">몸 대비 상대 복각</div>
+                        <div id="telRelDip" class="text-sm font-bold text-amber-400 mt-0.5">-54.0&deg;</div>
+                    </div>
+                    <div class="bg-slate-950 p-2 rounded-xl border border-slate-800">
+                        <div class="text-[10px] text-slate-400">판독된 극방향</div>
+                        <div id="telPerceivedNorth" class="text-sm font-bold text-emerald-400 mt-0.5">정면 (N)</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Simulation & Experiment Control Panel -->
+            <section class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl flex-1">
+                <div class="flex items-center justify-between mb-4">
+                    <div>
+                        <h2 class="text-sm font-bold text-white flex items-center gap-2">
+                            <span>9축 IMU 시뮬레이션 &amp; 생물학 실험 제어기</span>
+                        </h2>
+                        <p class="text-[11px] text-slate-400">프리뷰(iframe) 센서 차단 시에도 슬라이더나 터치 드래그로 즉시 실험 가능합니다.</p>
+                    </div>
+                    <button id="btnResetSim" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 border border-slate-700 transition">
+                        초기화
+                    </button>
+                </div>
+
+                <!-- Famous Biological Experiment: Invert Bz Button -->
+                <div class="mb-5 p-3.5 rounded-xl bg-gradient-to-r from-indigo-950/80 to-fuchsia-950/60 border border-fuchsia-500/40">
+                    <div class="flex items-center justify-between gap-2">
+                        <div>
+                            <div class="text-xs font-bold text-fuchsia-200 flex items-center gap-1.5">
+                                <span>🧪 울새(Robin) 헬름홀츠 코일 실험: 수직 자기장(B<sub>z</sub>) 반전</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 mt-1 leading-relaxed">
+                                수평 극성(N/S)은 그대로 두고 <strong>수직 성분(B<sub>z</sub>)만 반전</strong>시키면, 자기장 축이 북쪽 하늘로 솟구치고 남쪽 땅으로 꽂힙니다. 경사각 나침반은 <strong>남쪽을 북쪽(극방향)으로 착각</strong>하게 됩니다!
+                            </p>
+                        </div>
+                        <button id="btnInvertBz" class="shrink-0 px-3.5 py-2.5 rounded-xl text-xs font-bold bg-slate-900 hover:bg-fuchsia-600 text-fuchsia-300 hover:text-white border border-fuchsia-500/50 transition-all shadow-lg">
+                            B<sub>z</sub> 정상 (+54&deg;)
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Sliders -->
+                <div class="space-y-4">
+                    <!-- Slider 1: Yaw / Heading -->
+                    <div>
+                        <div class="flex justify-between text-xs mb-1">
+                            <span class="text-slate-300 font-medium">1. 착용자 시선 방위각 (Yaw / Heading)</span>
+                            <span id="valYaw" class="mono text-cyan-400 font-bold">0&deg;</span>
+                        </div>
+                        <input id="sliderYaw" type="range" min="0" max="360" step="1" value="0" class="w-full">
+                        <div class="flex justify-between text-[10px] mono text-slate-500 mt-0.5">
+                            <span>0&deg; (북)</span>
+                            <span>90&deg; (동)</span>
+                            <span>180&deg; (남)</span>
+                            <span>270&deg; (서)</span>
+                            <span>360&deg; (북)</span>
+                        </div>
+                    </div>
+
+                    <!-- Slider 2: Pitch (Forward/Backward Tilt) -->
+                    <div>
+                        <div class="flex justify-between text-xs mb-1">
+                            <span class="text-slate-300 font-medium">2. 스마트폰 앞뒤 기울기 (Pitch &middot; 수평 0&deg;)</span>
+                            <span id="valPitch" class="mono text-amber-400 font-bold">0&deg;</span>
+                        </div>
+                        <input id="sliderPitch" type="range" min="-180" max="180" step="1" value="0" class="w-full">
+                        <div class="flex justify-between text-[10px] mono text-slate-500 mt-0.5">
+                            <span>-180&deg; (뒤집힘)</span>
+                            <button type="button" class="text-cyan-400 hover:underline font-semibold" onclick="alignWithMagneticAxis()">★ -54&deg; (자기장 축 정렬)</button>
+                            <span>0&deg; (완전 수평)</span>
+                            <span>+180&deg;</span>
+                        </div>
+                    </div>
+
+                    <!-- Slider 3: Roll (Left/Right Tilt) -->
+                    <div>
+                        <div class="flex justify-between text-xs mb-1">
+                            <span class="text-slate-300 font-medium">3. 스마트폰 좌우 기울기 (Roll &middot; 수평 0&deg;)</span>
+                            <span id="valRoll" class="mono text-amber-400 font-bold">0&deg;</span>
+                        </div>
+                        <input id="sliderRoll" type="range" min="-180" max="180" step="1" value="0" class="w-full">
+                        <div class="flex justify-between text-[10px] mono text-slate-500 mt-0.5">
+                            <span>-180&deg;</span>
+                            <span>-90&deg; (좌측 90&deg;)</span>
+                            <span>0&deg; (수평)</span>
+                            <span>+90&deg; (우측 90&deg;)</span>
+                            <span>+180&deg;</span>
+                        </div>
+                    </div>
+
+                    <!-- Slider 4: Local Magnetic Dip Angle (Latitude Preset) -->
+                    <div class="pt-2 border-t border-slate-800">
+                        <div class="flex justify-between text-xs mb-1">
+                            <span class="text-slate-300 font-medium">4. 지구 위도별 복각 (Magnetic Dip Angle I)</span>
+                            <span id="valDip" class="mono text-emerald-400 font-bold">+54&deg;</span>
+                        </div>
+                        <input id="sliderDip" type="range" min="-85" max="85" step="1" value="54" class="w-full">
+                        <div class="flex flex-wrap gap-1.5 mt-2">
+                            <button type="button" onclick="setDipPreset(54)" class="px-2 py-1 text-[10px] rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700">서울 (+54&deg;)</button>
+                            <button type="button" onclick="setDipPreset(67)" class="px-2 py-1 text-[10px] rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">유럽 울새 서식지 (+67&deg;)</button>
+                            <button type="button" onclick="setDipPreset(2)" class="px-2 py-1 text-[10px] rounded bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700">적도 부근 (+2&deg; &middot; 작동한계)</button>
+                            <button type="button" onclick="setDipPreset(-64)" class="px-2 py-1 text-[10px] rounded bg-slate-800 hover:bg-slate-700 text-fuchsia-300 border border-slate-700">호주 시드니 (-64&deg; &middot; 남반구)</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        </div>
+    </main>
+
+    <script>
+        /**
+         * Biomimetic Inclination Compass 2D Haptic Matrix Simulator
+         * Fixed for Android Chrome & Sandboxed Preview Iframes:
+         * - Multi-channel Android sensor fusion (deviceorientationabsolute + deviceorientation + devicemotion + Generic Sensor API)
+         * - Automatic iframe permission-policy detection + direct 1-finger touch drag gimbal on both Matrix & 3D Sphere
+         */
+
+        const COLS = 12; // Horizontal azimuth around torso: -165° to +165° (30° per column)
+        const ROWS = 7;  // Vertical elevation on torso: +90°, +60°, +30°, 0°, -30°, -60°, -90°
+
+        // Application State
+        const state = {
+            yaw: 0,           // Heading in degrees (0 = North, 90 = East, 180 = South, 270 = West)
+            pitch: 0,         // Device pitch in degrees (0 = lying flat on table, 90 = standing upright)
+            roll: 0,          // Device roll in degrees (0 = lying flat on table, 90 = tilted right side up)
+            rawYaw: 0,
+            rawPitch: 0,
+            rawRoll: 0,
+            filterAlpha: 0.15, // Low pass filter factor (0.05 = super smooth, 0.9 = fast/jittery)
+            activeSensorType: null, // Strictly tracks the SINGLE active sensor to prevent any racing
+            userSelectedSource: 'deviceorientationabsolute', // Default directly to absolute 9-axis
+            dipAngle: 54,     // Local Earth Magnetic Inclination (Seoul = +54° downward into earth)
+            invertBz: false,  // Helmholtz coil vertical magnetic field inversion experiment
+            polarityBlind: true, // true = Biomimetic Axial Mode (B == -B), false = Classical N-only mode
+            liveSensorActive: false,
+            sensorPackets: 0,
+            hasAbsoluteAlpha: false,
+            audioEnabled: false,
+            audioMode: 'dual' // 'dual' (both poleward & equatorward axes) or 'poleward' (only downward axis)
+        };
+
+        // Unique Session Ticket: Discards any zombie callbacks from previous sensor instances
+        let currentSensorSessionId = 0;
+
+        /**
+         * Web Audio API 3D HRTF Spatial Audio Engine
+         * Maps the 3D magnetic field vector in the user's head/body coordinate frame
+         * directly to HRTF PannerNodes so the user hears the magnetic field direction.
+         */
+        const spatialAudio = {
+            ctx: null,
+            masterGain: null,
+            // Poleward (Earth-ward / North) sound source
+            poleOsc: null,
+            poleSubOsc: null,
+            poleFilter: null,
+            poleGain: null,
+            polePanner: null,
+            // Equatorward (Sky-ward / South axial reflection) sound source
+            eqOsc: null,
+            eqFilter: null,
+            eqGain: null,
+            eqPanner: null,
+            // Alignment Lock Chime (plays harmonic lock when looking straight down the magnetic axis)
+            lockOsc: null,
+            lockGain: null,
+            pulsePhase: 0,
+            timerId: null
+        };
+
+        function initSpatialAudio() {
+            if (spatialAudio.ctx) return;
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            const ctx = new AudioCtx();
+            spatialAudio.ctx = ctx;
+
+            const masterGain = ctx.createGain();
+            masterGain.gain.value = 0.75;
+            masterGain.connect(ctx.destination);
+            spatialAudio.masterGain = masterGain;
+
+            // 1. Poleward Source (Downward into Earth - Warm Grounded Pulse)
+            const polePanner = ctx.createPanner();
+            polePanner.panningModel = 'HRTF';
+            polePanner.distanceModel = 'inverse';
+            polePanner.refDistance = 1;
+            polePanner.maxDistance = 10;
+            polePanner.rolloffFactor = 1;
+            polePanner.connect(masterGain);
+
+            const poleFilter = ctx.createBiquadFilter();
+            poleFilter.type = 'lowpass';
+            poleFilter.frequency.value = 420;
+            poleFilter.Q.value = 3.5;
+
+            const poleGain = ctx.createGain();
+            poleGain.gain.value = 0.001;
+            poleFilter.connect(poleGain);
+            poleGain.connect(polePanner);
+
+            const poleOsc = ctx.createOscillator();
+            poleOsc.type = 'sawtooth';
+            poleOsc.frequency.value = 196; // G3
+            poleOsc.connect(poleFilter);
+            poleOsc.start();
+
+            const poleSubOsc = ctx.createOscillator();
+            poleSubOsc.type = 'sine';
+            poleSubOsc.frequency.value = 98; // G2 sub-bass for downward gravity cue
+            poleSubOsc.connect(poleFilter);
+            poleSubOsc.start();
+
+            spatialAudio.polePanner = polePanner;
+            spatialAudio.poleFilter = poleFilter;
+            spatialAudio.poleGain = poleGain;
+            spatialAudio.poleOsc = poleOsc;
+            spatialAudio.poleSubOsc = poleSubOsc;
+
+            // 2. Equatorward Source (Upward into Sky - Airy High Harmonic)
+            const eqPanner = ctx.createPanner();
+            eqPanner.panningModel = 'HRTF';
+            eqPanner.distanceModel = 'inverse';
+            eqPanner.refDistance = 1;
+            eqPanner.maxDistance = 10;
+            eqPanner.rolloffFactor = 1;
+            eqPanner.connect(masterGain);
+
+            const eqFilter = ctx.createBiquadFilter();
+            eqFilter.type = 'bandpass';
+            eqFilter.frequency.value = 880;
+            eqFilter.Q.value = 2.0;
+
+            const eqGain = ctx.createGain();
+            eqGain.gain.value = 0.001;
+            eqFilter.connect(eqGain);
+            eqGain.connect(eqPanner);
+
+            const eqOsc = ctx.createOscillator();
+            eqOsc.type = 'triangle';
+            eqOsc.frequency.value = 587.33; // D5 airy fifth
+            eqOsc.connect(eqFilter);
+            eqOsc.start();
+
+            spatialAudio.eqPanner = eqPanner;
+            spatialAudio.eqFilter = eqFilter;
+            spatialAudio.eqGain = eqGain;
+            spatialAudio.eqOsc = eqOsc;
+
+            // 3. Sightline Alignment Resonance Lock (Harmonic shimmer when looking right at the axis)
+            const lockGain = ctx.createGain();
+            lockGain.gain.value = 0.0001;
+            lockGain.connect(masterGain);
+
+            const lockOsc = ctx.createOscillator();
+            lockOsc.type = 'sine';
+            lockOsc.frequency.value = 392.0; // G4 pure resonance
+            lockOsc.connect(lockGain);
+            lockOsc.start();
+
+            spatialAudio.lockGain = lockGain;
+            spatialAudio.lockOsc = lockOsc;
+
+            // Configure Listener Orientation in Web Audio API:
+            // In our body coordinate frame: +X = Right, +Y = Forward, +Z = Up
+            // In Web Audio API standard frame: +X = Right, +Y = Up, -Z = Forward
+            const listener = ctx.listener;
+            if (listener.forwardX) {
+                listener.forwardX.value = 0;
+                listener.forwardY.value = 0;
+                listener.forwardZ.value = -1;
+                listener.upX.value = 0;
+                listener.upY.value = 1;
+                listener.upZ.value = 0;
+            } else if (listener.setOrientation) {
+                listener.setOrientation(0, 0, -1, 0, 1, 0);
+            }
+
+            // Start rhythmic sonar pulse modulator (60fps smooth envelope)
+            spatialAudio.timerId = setInterval(() => {
+                if (!state.audioEnabled || !spatialAudio.ctx) return;
+                const data = computeKinematicsAndField();
+                updateSpatialAudioFrame(data);
+            }, 40);
+        }
+
+        function setPannerPosition(panner, bodyVec) {
+            // Convert Body Frame (x: Right, y: Forward, z: Up) -> Web Audio Frame (X: Right, Y: Up, Z: -Forward)
+            const audioX = bodyVec.x * 2.0;
+            const audioY = bodyVec.z * 2.0;
+            const audioZ = -bodyVec.y * 2.0;
+
+            const now = spatialAudio.ctx.currentTime;
+            if (panner.positionX) {
+                panner.positionX.setTargetAtTime(audioX, now, 0.035);
+                panner.positionY.setTargetAtTime(audioY, now, 0.035);
+                panner.positionZ.setTargetAtTime(audioZ, now, 0.035);
+            } else if (panner.setPosition) {
+                panner.setPosition(audioX, audioY, audioZ);
+            }
+        }
+
+        function updateSpatialAudioFrame(data) {
+            if (!state.audioEnabled || !spatialAudio.ctx) return;
+            const now = spatialAudio.ctx.currentTime;
+
+            // 1. Update 3D HRTF positions
+            const pVec = state.polarityBlind ? data.polewardVec : data.B_body;
+            setPannerPosition(spatialAudio.polePanner, pVec);
+            setPannerPosition(spatialAudio.eqPanner, data.equatorwardVec);
+
+            // 2. Compute alignment between user's forward gaze (+Y body axis) and magnetic vector
+            // Forward alignment with Poleward vector: pVec.y ranges from -1 (behind) to +1 (dead ahead)
+            const forwardDotPole = pVec.y; // +1 when facing poleward horizontally & pitched into the dip
+            const axialCosSq = data.B_body.y * data.B_body.y; // cos²θ radical pair yield
+
+            // Pulse speed increases as gaze aligns with magnetic axis (Sonar Geiger-counter / bio-resonance effect)
+            const pulseRate = 2.2 + axialCosSq * 5.5;
+            spatialAudio.pulsePhase = (spatialAudio.pulsePhase + pulseRate * 0.04) % (Math.PI * 2);
+            const pulseEnv = 0.55 + 0.45 * Math.sin(spatialAudio.pulsePhase);
+
+            // Pitch & Filter brightness modulate based on elevation & front alignment
+            // Looking straight at the poleward vector makes it brighter and louder
+            const frontFactor = Math.max(0.15, (forwardDotPole + 1) * 0.5); // 1.0 in front, 0.15 behind (simulates head shadow)
+            const poleFreq = 174.61 + frontFactor * 45 + (pVec.z * 30); // Shifts pitch slightly with elevation
+            spatialAudio.poleOsc.frequency.setTargetAtTime(poleFreq, now, 0.04);
+            spatialAudio.poleSubOsc.frequency.setTargetAtTime(poleFreq * 0.5, now, 0.04);
+            spatialAudio.poleFilter.frequency.setTargetAtTime(220 + frontFactor * 950, now, 0.04);
+
+            const targetPoleGain = (0.12 + 0.26 * frontFactor) * pulseEnv;
+            spatialAudio.poleGain.gain.setTargetAtTime(targetPoleGain, now, 0.03);
+
+            // Equatorward (Skyward opposite axis) sound only plays in Bio Dual-Axis Mode
+            if (state.polarityBlind && state.audioMode === 'dual') {
+                const eqFrontFactor = Math.max(0.1, (data.equatorwardVec.y + 1) * 0.5);
+                const eqEnv = 0.55 + 0.45 * Math.sin(spatialAudio.pulsePhase + Math.PI); // Alternating sonar ping
+                spatialAudio.eqFilter.frequency.setTargetAtTime(500 + eqFrontFactor * 1100, now, 0.04);
+                spatialAudio.eqGain.gain.setTargetAtTime((0.06 + 0.16 * eqFrontFactor) * eqEnv, now, 0.03);
+            } else {
+                spatialAudio.eqGain.gain.setTargetAtTime(0.0001, now, 0.03);
+            }
+
+            // 3. Sightline Lock Harmonic Shime (when θ < 22°, i.e. cos²θ > 0.85)
+            const lockStrength = Math.max(0, (axialCosSq - 0.80) / 0.20);
+            spatialAudio.lockGain.gain.setTargetAtTime(lockStrength * 0.18, now, 0.04);
+            spatialAudio.lockOsc.frequency.setTargetAtTime(392 + lockStrength * 147, now, 0.04);
+        }
+
+        function toggleSpatialAudio() {
+            state.audioEnabled = !state.audioEnabled;
+            if (state.audioEnabled) {
+                initSpatialAudio();
+                if (spatialAudio.ctx && spatialAudio.ctx.state === 'suspended') {
+                    spatialAudio.ctx.resume();
+                }
+                updateSpatialAudioFrame(computeKinematicsAndField());
+            } else if (spatialAudio.ctx) {
+                const now = spatialAudio.ctx.currentTime;
+                spatialAudio.poleGain.gain.setTargetAtTime(0.0001, now, 0.03);
+                spatialAudio.eqGain.gain.setTargetAtTime(0.0001, now, 0.03);
+                spatialAudio.lockGain.gain.setTargetAtTime(0.0001, now, 0.03);
+            }
+
+            // Sync UI buttons
+            const btnTop = document.getElementById('btnAudioToggle');
+            const txtTop = document.getElementById('audioBtnText');
+            const btnPanel = document.getElementById('btnAudioPanelToggle');
+            const badge = document.getElementById('audioStatusBadge');
+
+            if (state.audioEnabled) {
+                txtTop.textContent = '3D 공간 음향: ON';
+                btnTop.className = 'px-3.5 py-2 rounded-xl text-xs font-semibold bg-indigo-600 text-white border border-indigo-400 flex items-center gap-1.5 transition-all active:scale-95 shadow-lg shadow-indigo-500/30';
+                btnPanel.textContent = '🔇 공간 음향 끄기';
+                btnPanel.className = 'px-3 py-1.5 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white shadow-lg transition-all';
+                badge.textContent = 'HRTF 출력 중';
+                badge.className = 'px-2 py-0.5 text-[10px] rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 mono';
+            } else {
+                txtTop.textContent = '3D 공간 음향: OFF';
+                btnTop.className = 'px-3.5 py-2 rounded-xl text-xs font-semibold bg-indigo-950/90 hover:bg-indigo-900 text-indigo-300 border border-indigo-500/40 flex items-center gap-1.5 transition-all active:scale-95 shadow-lg shadow-indigo-500/10';
+                btnPanel.textContent = '🎧 공간 음향 켜기';
+                btnPanel.className = 'px-3 py-1.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 transition-all';
+                badge.textContent = '대기 중';
+                badge.className = 'px-2 py-0.5 text-[10px] rounded bg-slate-800 text-slate-400 mono';
+            }
+        }
+
+        // DOM References
+        const hapticGridEl = document.getElementById('hapticGrid');
+        const overlayCanvas = document.getElementById('matrixOverlayCanvas');
+        const overlayCtx = overlayCanvas.getContext('2d');
+        const vector3DCanvas = document.getElementById('vector3DCanvas');
+        const vec3DCtx = vector3DCanvas.getContext('2d');
+
+        const sliderYaw = document.getElementById('sliderYaw');
+        const sliderPitch = document.getElementById('sliderPitch');
+        const sliderRoll = document.getElementById('sliderRoll');
+        const sliderDip = document.getElementById('sliderDip');
+
+        const nodeElements = [];
+
+        // Initialize 12 x 7 Haptic LRA Matrix DOM Nodes
+        function initHapticGrid() {
+            hapticGridEl.innerHTML = '';
+            nodeElements.length = 0;
+
+            for (let r = 0; r < ROWS; r++) {
+                const rowElev = 90 - r * 30; // +90, +60, +30, 0, -30, -60, -90
+                for (let c = 0; c < COLS; c++) {
+                    const colAz = -165 + c * 30; // -165, -135, ..., -15, +15, ..., +165
+
+                    const cell = document.createElement('div');
+                    cell.className = 'aspect-square rounded-lg border border-slate-800/90 bg-slate-900/90 flex flex-col items-center justify-center relative transition-transform duration-75 overflow-hidden';
+
+                    if (c === 5 || c === 6) {
+                        cell.classList.add('ring-1', 'ring-cyan-500/15');
+                    }
+
+                    const actuator = document.createElement('div');
+                    actuator.className = 'w-3/4 h-3/4 rounded-full flex items-center justify-center text-[9px] mono font-semibold text-slate-600 transition-colors duration-75';
+                    actuator.textContent = '0%';
+
+                    cell.appendChild(actuator);
+                    hapticGridEl.appendChild(cell);
+
+                    nodeElements.push({
+                        row: r,
+                        col: c,
+                        elevDeg: rowElev,
+                        azDeg: colAz,
+                        cellEl: cell,
+                        actuatorEl: actuator
+                    });
+                }
+            }
+        }
+
+        const deg2rad = d => d * Math.PI / 180;
+        const rad2deg = r => r * 180 / Math.PI;
+
+        function normalize(v) {
+            const len = Math.hypot(v.x, v.y, v.z) || 1;
+            return { x: v.x / len, y: v.y / len, z: v.z / len };
+        }
+
+        function dot(a, b) {
+            return a.x * b.x + a.y * b.y + a.z * b.z;
+        }
+
+        /**
+         * Compute World Vectors & Transform into Body Reference Frame
+         */
+        function computeKinematicsAndField() {
+            const effectiveDip = state.invertBz ? -state.dipAngle : state.dipAngle;
+            const dipRad = deg2rad(effectiveDip);
+
+            const B_world = normalize({
+                x: 0,
+                y: Math.cos(dipRad),
+                z: -Math.sin(dipRad)
+            });
+
+            const g_world = { x: 0, y: 0, z: -1 };
+
+            const yawRad = deg2rad(state.yaw);
+            const pitchRad = deg2rad(state.pitch);
+            const rollRad = deg2rad(state.roll);
+
+            function worldToBody(v) {
+                const cosY = Math.cos(yawRad), sinY = Math.sin(yawRad);
+                const x1 = v.x * cosY - v.y * sinY;
+                const y1 = v.x * sinY + v.y * cosY;
+                const z1 = v.z;
+
+                const cosP = Math.cos(pitchRad), sinP = Math.sin(pitchRad);
+                const x2 = x1;
+                const y2 = y1 * cosP + z1 * sinP;
+                const z2 = -y1 * sinP + z1 * cosP;
+
+                const cosR = Math.cos(rollRad), sinR = Math.sin(rollRad);
+                const x3 = x2 * cosR - z2 * sinR;
+                const y3 = y2;
+                const z3 = x2 * sinR + z2 * cosR;
+
+                return normalize({ x: x3, y: y3, z: z3 });
+            }
+
+            const B_body = worldToBody(B_world);
+            const g_body = worldToBody(g_world);
+
+            function vecToBodyAngles(v) {
+                const az = rad2deg(Math.atan2(v.x, v.y));
+                const elev = rad2deg(Math.asin(Math.max(-1, Math.min(1, v.z))));
+                return { az, elev };
+            }
+
+            const axisEnd1 = B_body;
+            const axisEnd2 = { x: -B_body.x, y: -B_body.y, z: -B_body.z };
+
+            const dotG1 = dot(axisEnd1, g_body);
+            const polewardVec = (dotG1 >= 0) ? axisEnd1 : axisEnd2;
+            const equatorwardVec = (dotG1 >= 0) ? axisEnd2 : axisEnd1;
+
+            return {
+                effectiveDip,
+                B_body,
+                g_body,
+                polewardVec,
+                equatorwardVec,
+                polewardAngles: vecToBodyAngles(polewardVec),
+                equatorwardAngles: vecToBodyAngles(equatorwardVec),
+                trueNorthAngles: vecToBodyAngles(B_body)
+            };
+        }
+
+        function updateSimulation() {
+            const data = computeKinematicsAndField();
+
+            nodeElements.forEach(node => {
+                const azRad = deg2rad(node.azDeg);
+                const elevRad = deg2rad(node.elevDeg);
+
+                const n_vec = {
+                    x: Math.cos(elevRad) * Math.sin(azRad),
+                    y: Math.cos(elevRad) * Math.cos(azRad),
+                    z: Math.sin(elevRad)
+                };
+
+                const cosTheta = dot(n_vec, data.B_body);
+
+                let activation = 0;
+                let isPolewardSide = false;
+
+                if (state.polarityBlind) {
+                    const absCos = Math.abs(cosTheta);
+                    activation = Math.pow(absCos, 10);
+                    isPolewardSide = dot(n_vec, data.g_body) >= 0;
+                } else {
+                    const posCos = Math.max(0, cosTheta);
+                    activation = Math.pow(posCos, 10);
+                    isPolewardSide = true;
+                }
+
+                const pct = Math.round(activation * 100);
+                node.actuatorEl.textContent = pct > 8 ? `${pct}%` : '';
+
+                if (pct > 15) {
+                    const alpha = Math.min(1, 0.2 + activation * 0.85);
+                    if (state.polarityBlind) {
+                        if (isPolewardSide) {
+                            node.actuatorEl.style.backgroundColor = `rgba(34, 211, 238, ${alpha})`;
+                            node.actuatorEl.style.boxShadow = `0 0 ${Math.round(activation * 22)}px rgba(34, 211, 238, ${alpha})`;
+                            node.cellEl.style.borderColor = `rgba(34, 211, 238, ${alpha * 0.9})`;
+                        } else {
+                            node.actuatorEl.style.backgroundColor = `rgba(232, 121, 249, ${alpha})`;
+                            node.actuatorEl.style.boxShadow = `0 0 ${Math.round(activation * 22)}px rgba(232, 121, 249, ${alpha})`;
+                            node.cellEl.style.borderColor = `rgba(232, 121, 249, ${alpha * 0.9})`;
+                        }
+                    } else {
+                        node.actuatorEl.style.backgroundColor = `rgba(56, 189, 248, ${alpha})`;
+                        node.actuatorEl.style.boxShadow = `0 0 ${Math.round(activation * 22)}px rgba(56, 189, 248, ${alpha})`;
+                        node.cellEl.style.borderColor = `rgba(56, 189, 248, ${alpha * 0.9})`;
+                    }
+                    node.actuatorEl.style.color = '#020617';
+
+                    if (pct > 65) {
+                        node.cellEl.classList.add('lra-active');
+                    } else {
+                        node.cellEl.classList.remove('lra-active');
+                    }
+                } else {
+                    node.actuatorEl.style.backgroundColor = 'rgba(15, 23, 42, 0.7)';
+                    node.actuatorEl.style.boxShadow = 'none';
+                    node.actuatorEl.style.color = '#475569';
+                    node.cellEl.style.borderColor = 'rgba(30, 41, 59, 0.9)';
+                    node.cellEl.classList.remove('lra-active');
+                }
+            });
+
+            drawMatrixOverlay(data);
+            draw3DVectorHUD(data);
+            updateTelemetryUI(data);
+        }
+
+        function anglesToCanvasXY(azDeg, elevDeg, width, height) {
+            const x = ((azDeg + 180) / 360) * width;
+            const padY = height / (ROWS * 2);
+            const usableH = height - padY * 2;
+            const y = padY + ((90 - elevDeg) / 180) * usableH;
+            return { x, y };
+        }
+
+        function drawMatrixOverlay(data) {
+            const rect = hapticGridEl.getBoundingClientRect();
+            if (rect.width === 0 || rect.height === 0) return;
+
+            const dpr = window.devicePixelRatio || 1;
+            overlayCanvas.width = rect.width * dpr;
+            overlayCanvas.height = rect.height * dpr;
+            overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+            const W = rect.width;
+            const H = rect.height;
+            overlayCtx.clearRect(0, 0, W, H);
+
+            const gx = data.g_body.x;
+            const gy = data.g_body.y;
+            const gz = data.g_body.z;
+
+            overlayCtx.save();
+            overlayCtx.beginPath();
+            for (let az = -180; az <= 180; az += 3) {
+                const azR = deg2rad(az);
+                let elevDeg = 0;
+                if (Math.abs(gz) > 1e-4) {
+                    const tanElev = -(gx * Math.sin(azR) + gy * Math.cos(azR)) / gz;
+                    elevDeg = rad2deg(Math.atan(tanElev));
+                }
+                const pt = anglesToCanvasXY(az, elevDeg, W, H);
+                if (az === -180) overlayCtx.moveTo(pt.x, pt.y);
+                else overlayCtx.lineTo(pt.x, pt.y);
+            }
+            overlayCtx.strokeStyle = 'rgba(251, 191, 36, 0.85)';
+            overlayCtx.lineWidth = 2.5;
+            overlayCtx.setLineDash([6, 4]);
+            overlayCtx.stroke();
+            overlayCtx.setLineDash([]);
+
+            const labelPt = anglesToCanvasXY(0, Math.abs(gz) > 1e-4 ? rad2deg(Math.atan(-gy / gz)) : 0, W, H);
+            overlayCtx.fillStyle = 'rgba(251, 191, 36, 0.95)';
+            overlayCtx.font = '600 10px Inter, sans-serif';
+            overlayCtx.fillText('▼ 중력 지면 방향 (Gravity Down)', Math.min(W - 155, Math.max(8, labelPt.x + 8)), Math.min(H - 8, Math.max(14, labelPt.y + 14)));
+            overlayCtx.restore();
+
+            if (state.polarityBlind) {
+                const pPt = anglesToCanvasXY(data.polewardAngles.az, data.polewardAngles.elev, W, H);
+                drawTargetMarker(overlayCtx, pPt.x, pPt.y, '#22d3ee', '극방향 축 (땅쪽)');
+
+                const ePt = anglesToCanvasXY(data.equatorwardAngles.az, data.equatorwardAngles.elev, W, H);
+                drawTargetMarker(overlayCtx, ePt.x, ePt.y, '#e879f9', '반대 축 (하늘쪽)');
+            } else {
+                const nPt = anglesToCanvasXY(data.trueNorthAngles.az, data.trueNorthAngles.elev, W, H);
+                drawTargetMarker(overlayCtx, nPt.x, nPt.y, '#38bdf8', '+B 단일 극성');
+            }
+        }
+
+        function drawTargetMarker(ctx, x, y, color, label) {
+            const dpr = window.devicePixelRatio || 1;
+            ctx.save();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+
+            ctx.beginPath();
+            ctx.arc(x, y, 14, 0, Math.PI * 2);
+            ctx.stroke();
+
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.font = 'bold 10px Inter, sans-serif';
+            const textW = ctx.measureText(label).width + 8;
+            const boxX = Math.min(ctx.canvas.width / dpr - textW - 4, Math.max(4, x - textW / 2));
+            const boxY = y > 28 ? y - 26 : y + 16;
+
+            ctx.fillStyle = 'rgba(2, 6, 23, 0.85)';
+            ctx.fillRect(boxX, boxY - 10, textW, 14);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1;
+            ctx.strokeRect(boxX, boxY - 10, textW, 14);
+
+            ctx.fillStyle = color;
+            ctx.fillText(label, boxX + 4, boxY);
+            ctx.restore();
+        }
+
+        function draw3DVectorHUD(data) {
+            const rect = vector3DCanvas.getBoundingClientRect();
+            if (rect.width === 0 || rect.height === 0) return;
+
+            const dpr = window.devicePixelRatio || 1;
+            vector3DCanvas.width = rect.width * dpr;
+            vector3DCanvas.height = rect.height * dpr;
+            vec3DCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+            const W = rect.width;
+            const H = rect.height;
+            const cx = W / 2;
+            const cy = H / 2 + 6;
+            const R = Math.min(W, H) * 0.38;
+
+            vec3DCtx.clearRect(0, 0, W, H);
+
+            // Camera Setup: Isometric Earth-Frame View
+            // Theta = -42°: North is upper-right, East is lower-right, South is lower-left, West is upper-left
+            // Phi = 24°: Ground plane looks completely horizontal and stable
+            const theta = deg2rad(-42);
+            const phi = deg2rad(24);
+            const cosT = Math.cos(theta), sinT = Math.sin(theta);
+            const cosP = Math.cos(phi), sinP = Math.sin(phi);
+
+            // World Frame Projection: vx = East (+X), vy = North (+Y), vz = Up (+Z)
+            function projectWorld(vx, vy, vz) {
+                const screenX = cx + R * (vx * cosT - vy * sinT);
+                const screenY = cy - R * (vz * cosP + (vx * sinT + vy * cosT) * sinP);
+                return { x: screenX, y: screenY };
+            }
+
+            // 1. Draw Ground Horizon Disc & Grid (Fixed Earth Plane Z = 0)
+            vec3DCtx.save();
+            vec3DCtx.fillStyle = 'rgba(15, 23, 42, 0.45)';
+            vec3DCtx.strokeStyle = 'rgba(51, 65, 85, 0.6)';
+            vec3DCtx.lineWidth = 1;
+            vec3DCtx.beginPath();
+            for (let a = 0; a <= 360; a += 6) {
+                const r = deg2rad(a);
+                const pt = projectWorld(Math.sin(r), Math.cos(r), 0);
+                if (a === 0) vec3DCtx.moveTo(pt.x, pt.y);
+                else vec3DCtx.lineTo(pt.x, pt.y);
+            }
+            vec3DCtx.closePath();
+            vec3DCtx.fill();
+            vec3DCtx.stroke();
+
+            // Ground Cardinal Cross Lines (N-S, E-W)
+            const originPt = projectWorld(0, 0, 0);
+            const nPt = projectWorld(0, 1.15, 0);
+            const sPt = projectWorld(0, -1.05, 0);
+            const ePt = projectWorld(1.05, 0, 0);
+            const wPt = projectWorld(-1.05, 0, 0);
+
+            vec3DCtx.strokeStyle = 'rgba(71, 85, 105, 0.4)';
+            vec3DCtx.setLineDash([3, 3]);
+            vec3DCtx.beginPath();
+            vec3DCtx.moveTo(sPt.x, sPt.y);
+            vec3DCtx.lineTo(nPt.x, nPt.y);
+            vec3DCtx.moveTo(wPt.x, wPt.y);
+            vec3DCtx.lineTo(ePt.x, ePt.y);
+            vec3DCtx.stroke();
+            vec3DCtx.setLineDash([]);
+
+            // Cardinal Labels
+            vec3DCtx.font = 'bold 10px JetBrains Mono, monospace';
+            vec3DCtx.fillStyle = '#38bdf8';
+            vec3DCtx.fillText('N (북)', nPt.x + 4, nPt.y - 2);
+            vec3DCtx.fillStyle = '#64748b';
+            vec3DCtx.fillText('S (남)', sPt.x - 22, sPt.y + 10);
+            vec3DCtx.fillText('E (동)', ePt.x + 4, ePt.y + 4);
+            vec3DCtx.fillText('W (서)', wPt.x - 24, wPt.y - 2);
+            vec3DCtx.restore();
+
+            // 2. Draw Fixed Gravity Vector g (Straight Down along -Z)
+            const gDownPt = projectWorld(0, 0, -1.0);
+            vec3DCtx.save();
+            vec3DCtx.strokeStyle = '#fbbf24';
+            vec3DCtx.lineWidth = 2.5;
+            vec3DCtx.beginPath();
+            vec3DCtx.moveTo(originPt.x, originPt.y);
+            vec3DCtx.lineTo(gDownPt.x, gDownPt.y);
+            vec3DCtx.stroke();
+            vec3DCtx.fillStyle = '#fbbf24';
+            vec3DCtx.beginPath();
+            vec3DCtx.arc(gDownPt.x, gDownPt.y, 4, 0, Math.PI * 2);
+            vec3DCtx.fill();
+            vec3DCtx.font = 'bold 9px Inter, sans-serif';
+            vec3DCtx.fillText('중력 g (지면수직)', gDownPt.x + 6, gDownPt.y + 4);
+            vec3DCtx.restore();
+
+            // 3. Draw Fixed Magnetic Axis Vector B (World Frame)
+            // B_world points North (+Y) and dips into the ground (-Z) at dipAngle
+            const effDip = data.effectiveDip;
+            const dipRad = deg2rad(effDip);
+            const bWorldPole = { x: 0, y: Math.cos(dipRad), z: -Math.sin(dipRad) };
+            const bWorldEq = { x: 0, y: -Math.cos(dipRad), z: Math.sin(dipRad) };
+
+            const polePt = projectWorld(bWorldPole.x * 1.25, bWorldPole.y * 1.25, bWorldPole.z * 1.25);
+            const eqPt = projectWorld(bWorldEq.x * 1.1, bWorldEq.y * 1.1, bWorldEq.z * 1.1);
+
+            // Dotted Axis connecting the two ends through origin
+            vec3DCtx.save();
+            vec3DCtx.strokeStyle = 'rgba(34, 211, 238, 0.35)';
+            vec3DCtx.setLineDash([4, 4]);
+            vec3DCtx.beginPath();
+            vec3DCtx.moveTo(eqPt.x, eqPt.y);
+            vec3DCtx.lineTo(polePt.x, polePt.y);
+            vec3DCtx.stroke();
+            vec3DCtx.setLineDash([]);
+
+            // Equatorward Vector (Sky-ward)
+            vec3DCtx.strokeStyle = '#e879f9';
+            vec3DCtx.lineWidth = 3;
+            vec3DCtx.beginPath();
+            vec3DCtx.moveTo(originPt.x, originPt.y);
+            vec3DCtx.lineTo(eqPt.x, eqPt.y);
+            vec3DCtx.stroke();
+            vec3DCtx.fillStyle = '#e879f9';
+            vec3DCtx.beginPath();
+            vec3DCtx.arc(eqPt.x, eqPt.y, 4.5, 0, Math.PI * 2);
+            vec3DCtx.fill();
+            vec3DCtx.font = 'bold 9px Inter, sans-serif';
+            vec3DCtx.fillText(`적도축 (+${Math.round(effDip)}° 하늘)`, eqPt.x + 6, eqPt.y - 2);
+
+            // Poleward Vector (Ground-ward)
+            vec3DCtx.strokeStyle = '#22d3ee';
+            vec3DCtx.lineWidth = 3.5;
+            vec3DCtx.beginPath();
+            vec3DCtx.moveTo(originPt.x, originPt.y);
+            vec3DCtx.lineTo(polePt.x, polePt.y);
+            vec3DCtx.stroke();
+            vec3DCtx.fillStyle = '#22d3ee';
+            vec3DCtx.beginPath();
+            vec3DCtx.arc(polePt.x, polePt.y, 5, 0, Math.PI * 2);
+            vec3DCtx.fill();
+            vec3DCtx.fillText(`자북극 축 (-${Math.round(effDip)}° 지중)`, polePt.x + 7, polePt.y + 4);
+            vec3DCtx.restore();
+
+            // 4. Compute Smartphone 3D Pose in World Frame
+            // Convert Yaw, Pitch, Roll to Phone Forward, Right, Up vectors in World Space
+            const yawRad = deg2rad(state.yaw);
+            const pitchRad = deg2rad(state.pitch);
+            const rollRad = deg2rad(state.roll);
+
+            // Start: Phone lying flat facing North (+Y), Right is East (+X), Normal is Up (+Z)
+            // Apply Yaw around Z:
+            const f_yaw = { x: Math.sin(yawRad), y: Math.cos(yawRad), z: 0 };
+            const r_yaw = { x: Math.cos(yawRad), y: -Math.sin(yawRad), z: 0 };
+            const u_yaw = { x: 0, y: 0, z: 1 };
+
+            // Apply Pitch around Phone Right axis:
+            const cosPch = Math.cos(pitchRad), sinPch = Math.sin(pitchRad);
+            const f_pitch = {
+                x: f_yaw.x * cosPch + u_yaw.x * sinPch,
+                y: f_yaw.y * cosPch + u_yaw.y * sinPch,
+                z: f_yaw.z * cosPch + u_yaw.z * sinPch
+            };
+            const u_pitch = {
+                x: -f_yaw.x * sinPch + u_yaw.x * cosPch,
+                y: -f_yaw.y * sinPch + u_yaw.y * cosPch,
+                z: -f_yaw.z * sinPch + u_yaw.z * cosPch
+            };
+            const r_pitch = r_yaw;
+
+            // Apply Roll around Phone Forward axis:
+            const cosRl = Math.cos(rollRad), sinRl = Math.sin(rollRad);
+            const r_world = {
+                x: r_pitch.x * cosRl + u_pitch.x * sinRl,
+                y: r_pitch.y * cosRl + u_pitch.y * sinRl,
+                z: r_pitch.z * cosRl + u_pitch.z * sinRl
+            };
+            const u_world = {
+                x: -r_pitch.x * sinRl + u_pitch.x * cosRl,
+                y: -r_pitch.y * sinRl + u_pitch.y * cosRl,
+                z: -r_pitch.z * sinRl + u_pitch.z * cosRl
+            };
+            const f_world = f_pitch; // Forward axis in world
+
+            // 5. Draw 3D Smartphone Body
+            const phoneLen = 0.55;
+            const phoneWid = 0.30;
+            const cTL = {
+                x: -r_world.x * (phoneWid / 2) + f_world.x * (phoneLen / 2),
+                y: -r_world.y * (phoneWid / 2) + f_world.y * (phoneLen / 2),
+                z: -r_world.z * (phoneWid / 2) + f_world.z * (phoneLen / 2)
+            };
+            const cTR = {
+                x: r_world.x * (phoneWid / 2) + f_world.x * (phoneLen / 2),
+                y: r_world.y * (phoneWid / 2) + f_world.y * (phoneLen / 2),
+                z: r_world.z * (phoneWid / 2) + f_world.z * (phoneLen / 2)
+            };
+            const cBR = {
+                x: r_world.x * (phoneWid / 2) - f_world.x * (phoneLen / 2),
+                y: r_world.y * (phoneWid / 2) - f_world.y * (phoneLen / 2),
+                z: r_world.z * (phoneWid / 2) - f_world.z * (phoneLen / 2)
+            };
+            const cBL = {
+                x: -r_world.x * (phoneWid / 2) - f_world.x * (phoneLen / 2),
+                y: -r_world.y * (phoneWid / 2) - f_world.y * (phoneLen / 2),
+                z: -r_world.z * (phoneWid / 2) - f_world.z * (phoneLen / 2)
+            };
+
+            const pTL = projectWorld(cTL.x, cTL.y, cTL.z);
+            const pTR = projectWorld(cTR.x, cTR.y, cTR.z);
+            const pBR = projectWorld(cBR.x, cBR.y, cBR.z);
+            const pBL = projectWorld(cBL.x, cBL.y, cBL.z);
+
+            vec3DCtx.save();
+            // Phone screen plate
+            vec3DCtx.fillStyle = 'rgba(16, 185, 129, 0.22)';
+            vec3DCtx.strokeStyle = '#10b981';
+            vec3DCtx.lineWidth = 2;
+            vec3DCtx.beginPath();
+            vec3DCtx.moveTo(pTL.x, pTL.y);
+            vec3DCtx.lineTo(pTR.x, pTR.y);
+            vec3DCtx.lineTo(pBR.x, pBR.y);
+            vec3DCtx.lineTo(pBL.x, pBL.y);
+            vec3DCtx.closePath();
+            vec3DCtx.fill();
+            vec3DCtx.stroke();
+
+            // Front Camera Notch (indicates top/forward side of phone)
+            const notchPt = projectWorld(f_world.x * (phoneLen * 0.44), f_world.y * (phoneLen * 0.44), f_world.z * (phoneLen * 0.44));
+            vec3DCtx.fillStyle = '#34d399';
+            vec3DCtx.beginPath();
+            vec3DCtx.arc(notchPt.x, notchPt.y, 2.5, 0, Math.PI * 2);
+            vec3DCtx.fill();
+
+            // 6. Draw Phone Forward Sightline Arrow (+Y Front Camera)
+            const arrowTip = {
+                x: f_world.x * 1.05,
+                y: f_world.y * 1.05,
+                z: f_world.z * 1.05
+            };
+            const pTip = projectWorld(arrowTip.x, arrowTip.y, arrowTip.z);
+
+            vec3DCtx.strokeStyle = '#10b981';
+            vec3DCtx.lineWidth = 3;
+            vec3DCtx.beginPath();
+            vec3DCtx.moveTo(originPt.x, originPt.y);
+            vec3DCtx.lineTo(pTip.x, pTip.y);
+            vec3DCtx.stroke();
+
+            vec3DCtx.fillStyle = '#10b981';
+            vec3DCtx.beginPath();
+            vec3DCtx.arc(pTip.x, pTip.y, 4.5, 0, Math.PI * 2);
+            vec3DCtx.fill();
+            vec3DCtx.font = 'bold 10px JetBrains Mono, monospace';
+            vec3DCtx.fillText('시선/폰(+Y)', pTip.x + 6, pTip.y - 4);
+            vec3DCtx.restore();
+        }
+
+        function updateTelemetryUI(data) {
+            const cosFront = data.B_body.y;
+            const cosSq = cosFront * cosFront;
+            const acuteTheta = rad2deg(Math.acos(Math.min(1, Math.abs(cosFront))));
+
+            document.getElementById('angleThetaVal').textContent = `${acuteTheta.toFixed(1)}°`;
+            document.getElementById('cosSqVal').textContent = `${(cosSq * 100).toFixed(1)}%`;
+            document.getElementById('singletYieldText').textContent = `Φ_S ∝ cos²θ = ${cosSq.toFixed(3)}`;
+            document.getElementById('yieldProgressBar').style.width = `${(cosSq * 100).toFixed(1)}%`;
+
+            const pAz = data.polewardAngles.az;
+            const pEl = data.polewardAngles.elev;
+            const eAz = data.equatorwardAngles.az;
+            const eEl = data.equatorwardAngles.elev;
+
+            document.getElementById('polewardBadge').textContent = `방위 ${pAz >= 0 ? '+' : ''}${pAz.toFixed(0)}° / 고도 ${pEl >= 0 ? '+' : ''}${pEl.toFixed(0)}°`;
+            document.getElementById('equatorwardBadge').textContent = `방위 ${eAz >= 0 ? '+' : ''}${eAz.toFixed(0)}° / 고도 ${eEl >= 0 ? '+' : ''}${eEl.toFixed(0)}°`;
+
+            document.getElementById('telAzimuth').textContent = `${pAz >= 0 ? '+' : ''}${pAz.toFixed(1)}°`;
+            document.getElementById('telRelDip').textContent = `${pEl >= 0 ? '+' : ''}${pEl.toFixed(1)}°`;
+
+            let dirLabel = '정면';
+            if (Math.abs(data.effectiveDip) < 4) {
+                dirLabel = '판별불가 (적도 수평)';
+            } else if (Math.abs(pAz) < 25) {
+                dirLabel = state.invertBz ? '정면 (남쪽을 북으로 착각!)' : '정면 (극방향)';
+            } else if (pAz >= 25 && pAz < 155) {
+                dirLabel = '우측 방향';
+            } else if (pAz <= -25 && pAz > -155) {
+                dirLabel = '좌측 방향';
+            } else {
+                dirLabel = '등 뒤쪽';
+            }
+            document.getElementById('telPerceivedNorth').textContent = dirLabel;
+
+            const normalizedYaw = ((Math.round(state.yaw) % 360) + 360) % 360;
+            const cardinal = ['N (북)', 'NE (북동)', 'E (동)', 'SE (남동)', 'S (남)', 'SW (남서)', 'W (서)', 'NW (북서)'][Math.round(normalizedYaw / 45) % 8];
+            document.getElementById('compassHeadingBadge').textContent = `시선: ${normalizedYaw}° ${cardinal}`;
+
+            // Update Audio Telemetry UI
+            document.getElementById('audioLockVal').textContent = `${(cosSq * 100).toFixed(0)}%`;
+            const panX = data.polewardVec.x;
+            let panLabel = '정면 중앙';
+            if (panX > 0.25) panLabel = `우측 편향 (+${panX.toFixed(2)})`;
+            else if (panX < -0.25) panLabel = `좌측 편향 (${panX.toFixed(2)})`;
+            else if (data.polewardVec.y < 0) panLabel = `후방 (${panX.toFixed(2)})`;
+            document.getElementById('audioPanInfo').textContent = `음상 위치: ${panLabel}`;
+
+            if (state.audioEnabled) {
+                updateSpatialAudioFrame(data);
+            }
+        }
+
+        function syncSlidersToUI() {
+            const normYaw = ((Math.round(state.yaw) % 360) + 360) % 360;
+            sliderYaw.value = normYaw;
+            sliderPitch.value = Math.round(state.pitch);
+            sliderRoll.value = Math.round(state.roll);
+            sliderDip.value = Math.round(state.dipAngle);
+
+            document.getElementById('valYaw').textContent = `${normYaw}°`;
+            document.getElementById('valPitch').textContent = `${Math.round(state.pitch)}°`;
+            document.getElementById('valRoll').textContent = `${Math.round(state.roll)}°`;
+            document.getElementById('valDip').textContent = `${state.dipAngle >= 0 ? '+' : ''}${Math.round(state.dipAngle)}°`;
+        }
+
+        sliderYaw.addEventListener('input', e => {
+            state.yaw = parseFloat(e.target.value);
+            syncSlidersToUI();
+            updateSimulation();
+        });
+        sliderPitch.addEventListener('input', e => {
+            state.pitch = parseFloat(e.target.value);
+            syncSlidersToUI();
+            updateSimulation();
+        });
+        sliderRoll.addEventListener('input', e => {
+            state.roll = parseFloat(e.target.value);
+            syncSlidersToUI();
+            updateSimulation();
+        });
+        sliderDip.addEventListener('input', e => {
+            state.dipAngle = parseFloat(e.target.value);
+            syncSlidersToUI();
+            updateSimulation();
+        });
+
+        window.setDipPreset = function(dip) {
+            state.dipAngle = dip;
+            syncSlidersToUI();
+            updateSimulation();
+        };
+
+        window.alignWithMagneticAxis = function() {
+            state.yaw = 0;
+            state.pitch = -state.dipAngle;
+            state.roll = 0;
+            syncSlidersToUI();
+            updateSimulation();
+        };
+
+        // Direct 1-Finger Touch / Mouse Drag Gimbal on Matrix & 3D Sphere (Works 100% even in sensor-blocked Android iframes!)
+        function attachTouchGimbal(element) {
+            let isDragging = false;
+            let lastX = 0;
+            let lastY = 0;
+
+            element.addEventListener('pointerdown', e => {
+                isDragging = true;
+                lastX = e.clientX;
+                lastY = e.clientY;
+                element.setPointerCapture(e.pointerId);
+            });
+
+            element.addEventListener('pointermove', e => {
+                if (!isDragging) return;
+                const dx = e.clientX - lastX;
+                const dy = e.clientY - lastY;
+                lastX = e.clientX;
+                lastY = e.clientY;
+
+                state.yaw = ((state.yaw + dx * 0.65) % 360 + 360) % 360;
+                let newPitch = state.pitch - dy * 0.45;
+                if (newPitch > 180) newPitch -= 360;
+                if (newPitch < -180) newPitch += 360;
+                state.pitch = newPitch;
+
+                document.getElementById('sensorSourceLabel').textContent = '모드: 터치 드래그 제어 중';
+                syncSlidersToUI();
+                updateSimulation();
+            });
+
+            const stopDrag = e => {
+                if (!isDragging) return;
+                isDragging = false;
+                try { element.releasePointerCapture(e.pointerId); } catch (_) {}
+            };
+            element.addEventListener('pointerup', stopDrag);
+            element.addEventListener('pointercancel', stopDrag);
+        }
+
+        attachTouchGimbal(document.getElementById('matrixTouchArea'));
+        attachTouchGimbal(document.getElementById('sphereTouchArea'));
+
+        // Bz Inversion Experiment Toggle
+        const btnInvertBz = document.getElementById('btnInvertBz');
+        btnInvertBz.addEventListener('click', () => {
+            state.invertBz = !state.invertBz;
+            if (state.invertBz) {
+                btnInvertBz.innerHTML = `⚡ B<sub>z</sub> 반전됨 (${-state.dipAngle}&deg;)`;
+                btnInvertBz.className = 'shrink-0 px-3.5 py-2.5 rounded-xl text-xs font-bold bg-fuchsia-600 text-white border border-fuchsia-300 transition-all shadow-lg shadow-fuchsia-500/30';
+            } else {
+                btnInvertBz.innerHTML = `B<sub>z</sub> 정상 (+${state.dipAngle}&deg;)`;
+                btnInvertBz.className = 'shrink-0 px-3.5 py-2.5 rounded-xl text-xs font-bold bg-slate-900 hover:bg-fuchsia-600 text-fuchsia-300 hover:text-white border border-fuchsia-500/50 transition-all shadow-lg';
+            }
+            updateSimulation();
+        });
+
+        // Mode Switch
+        const modeBioBtn = document.getElementById('modeBioBtn');
+        const modeClassicalBtn = document.getElementById('modeClassicalBtn');
+
+        modeBioBtn.addEventListener('click', () => {
+            state.polarityBlind = true;
+            modeBioBtn.className = 'px-3 py-1.5 rounded-lg text-xs font-semibold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 transition-all';
+            modeClassicalBtn.className = 'px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-slate-200 transition-all';
+            updateSimulation();
+        });
+
+        modeClassicalBtn.addEventListener('click', () => {
+            state.polarityBlind = false;
+            modeClassicalBtn.className = 'px-3 py-1.5 rounded-lg text-xs font-semibold bg-sky-500/20 text-sky-300 border border-sky-500/40 transition-all';
+            modeBioBtn.className = 'px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-slate-200 transition-all';
+            updateSimulation();
+        });
+
+        // Reset Button
+        document.getElementById('btnResetSim').addEventListener('click', () => {
+            state.yaw = 0;
+            state.pitch = 0;
+            state.roll = 0;
+            state.rawYaw = 0;
+            state.rawPitch = 0;
+            state.rawRoll = 0;
+            state.dipAngle = 54;
+            state.invertBz = false;
+            btnInvertBz.innerHTML = `B<sub>z</sub> 정상 (+54&deg;)`;
+            btnInvertBz.className = 'shrink-0 px-3.5 py-2.5 rounded-xl text-xs font-bold bg-slate-900 hover:bg-fuchsia-600 text-fuchsia-300 hover:text-white border border-fuchsia-500/50 transition-all shadow-lg';
+            syncSlidersToUI();
+            updateSimulation();
+        });
+
+        // Filter Slider
+        const sliderFilter = document.getElementById('sliderFilter');
+        sliderFilter.addEventListener('input', e => {
+            state.filterAlpha = parseFloat(e.target.value);
+            const pct = Math.round((1 - state.filterAlpha) * 100);
+            document.getElementById('filterValText').textContent = pct > 70 ? `부드럽게 (${pct}%)` : pct > 30 ? `보통 (${pct}%)` : `즉각 반응 (${pct}%)`;
+        });
+
+        // Sensor Source Dropdown
+        const sensorSourceSelect = document.getElementById('sensorSourceSelect');
+        sensorSourceSelect.addEventListener('change', e => {
+            state.userSelectedSource = e.target.value;
+            setDiagnosticStatus('센서 교체 중', 'amber', `선택된 [${e.target.value}] 센서로 단독 재연결합니다...`);
+            bindExclusiveSensor(state.userSelectedSource);
+        });
+
+        // 3D Spatial Audio Toggle Buttons & Radio Mode Listeners
+        document.getElementById('btnAudioToggle').addEventListener('click', toggleSpatialAudio);
+        document.getElementById('btnAudioPanelToggle').addEventListener('click', toggleSpatialAudio);
+        document.querySelectorAll('input[name="audioMode"]').forEach(radio => {
+            radio.addEventListener('change', e => {
+                state.audioMode = e.target.value;
+                updateSimulation();
+            });
+        });
+
+        /**
+         * EXCLUSIVE SINGLE-CHANNEL SENSOR ARCHITECTURE WITH SESSION TICKETING
+         * Eliminates zombie callbacks and sensor fighting:
+         * 1. Uses unique `currentSensorSessionId` ticket to drop out-of-order/stale packets.
+         * 2. Completely purges old event listeners before attaching new ones.
+         * 3. Explicitly stops and cleans WebSensor instances.
+         */
+        const btnSensorConnect = document.getElementById('btnSensorConnect');
+        let activeHandler = null;
+        let activeEventName = null;
+        let genericSensorInstance = null;
+        let genericSensorReadingHandler = null;
+
+        function setDiagnosticStatus(badgeText, badgeColor, msg) {
+            const banner = document.getElementById('statusBanner');
+            const badge = document.getElementById('diagBadge');
+            banner.classList.remove('hidden');
+            badge.textContent = badgeText;
+            if (badgeColor === 'emerald') {
+                badge.className = 'px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-semibold mono text-[10px]';
+            } else if (badgeColor === 'rose') {
+                badge.className = 'px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 font-semibold mono text-[10px]';
+            } else {
+                badge.className = 'px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold mono text-[10px]';
+            }
+            document.getElementById('statusMessage').textContent = msg;
+        }
+
+        // Circular interpolation for smooth angle transitions (handles 0° <-> 360° seamlessly)
+        function smoothHeading(current, target, factor) {
+            let diff = (target - current) % 360;
+            if (diff > 180) diff -= 360;
+            if (diff < -180) diff += 360;
+            // Deadzone: Ignore tiny jitters smaller than 0.3° to prevent actuator buzzing
+            if (Math.abs(diff) < 0.3) return current;
+            return (current + diff * factor + 360) % 360;
+        }
+
+        function unbindAllSensors() {
+            // Invalidate any incoming asynchronous events from previous sensors
+            currentSensorSessionId++;
+
+            if (activeEventName && activeHandler) {
+                window.removeEventListener(activeEventName, activeHandler, true);
+                window.removeEventListener(activeEventName, activeHandler, false);
+                activeHandler = null;
+                activeEventName = null;
+            }
+            if (genericSensorInstance) {
+                try {
+                    if (genericSensorReadingHandler) {
+                        genericSensorInstance.removeEventListener('reading', genericSensorReadingHandler);
+                    }
+                    genericSensorInstance.stop();
+                } catch (_) {}
+                genericSensorInstance = null;
+                genericSensorReadingHandler = null;
+            }
+            state.activeSensorType = null;
+        }
+
+        function applyCleanSensorReading(ticket, displayName, targetYaw, targetPitch, targetRoll) {
+            // Guard against zombie sensor callbacks
+            if (ticket !== currentSensorSessionId) return;
+
+            state.sensorPackets++;
+            state.liveSensorActive = true;
+
+            // Screen Orientation correction (portrait vs landscape)
+            const screenAngle = window.screen?.orientation?.angle || window.orientation || 0;
+            let adjustedYaw = (targetYaw + screenAngle + 360) % 360;
+
+            // Low-pass exponential moving average
+            const k = state.filterAlpha;
+            state.yaw = smoothHeading(state.yaw, adjustedYaw, k);
+            
+            // Raw physical pitch and roll tracking without artificial clamp or offset
+            let diffPitch = targetPitch - state.pitch;
+            if (diffPitch > 180) diffPitch -= 360;
+            if (diffPitch < -180) diffPitch += 360;
+            if (Math.abs(diffPitch) > 0.2) {
+                state.pitch = state.pitch + diffPitch * k;
+            }
+
+            let diffRoll = targetRoll - state.roll;
+            if (diffRoll > 180) diffRoll -= 360;
+            if (diffRoll < -180) diffRoll += 360;
+            if (Math.abs(diffRoll) > 0.2) {
+                state.roll = state.roll + diffRoll * k;
+            }
+
+            if (state.sensorPackets % 5 === 0) {
+                document.getElementById('sensorPacketCounter').textContent = `수신 패킷: ${state.sensorPackets}`;
+                document.getElementById('sensorBtnText').textContent = `🔒 ${displayName} 작동 중`;
+                document.getElementById('sensorSourceLabel').textContent = `모드: ${displayName} (단독 고정)`;
+            }
+
+            if (state.sensorPackets === 1) {
+                setDiagnosticStatus(
+                    '단일 센서 연결 완료',
+                    'emerald',
+                    `[${displayName}] 채널만 단독으로 연결되었습니다. 타 센서 간섭 및 깜빡임이 차단되었습니다.`
+                );
+            }
+
+            syncSlidersToUI();
+            updateSimulation();
+        }
+
+        function bindExclusiveSensor(preferredSource) {
+            unbindAllSensors();
+
+            const thisTicket = currentSensorSessionId;
+            let targetSource = preferredSource || 'deviceorientationabsolute';
+
+            if (targetSource === 'websensor' && 'AbsoluteOrientationSensor' in window) {
+                try {
+                    genericSensorInstance = new AbsoluteOrientationSensor({ frequency: 40, referenceFrame: 'device' });
+                    genericSensorReadingHandler = () => {
+                        if (thisTicket !== currentSensorSessionId) return;
+                        const q = genericSensorInstance.quaternion;
+                        if (!q) return;
+                        const [x, y, z, w] = q;
+                        const yaw = rad2deg(Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)));
+                        const pitch = rad2deg(Math.asin(Math.max(-1, Math.min(1, 2 * (w * x - y * z)))));
+                        const roll = rad2deg(Math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y)));
+
+                        // Unconstrained physical angles (lying flat = pitch 0, roll 0)
+                        applyCleanSensorReading(
+                            thisTicket,
+                            'WebSensor 9축',
+                            (360 - yaw + 360) % 360,
+                            pitch,
+                            roll
+                        );
+                    };
+                    genericSensorInstance.addEventListener('reading', genericSensorReadingHandler);
+                    genericSensorInstance.start();
+                    state.activeSensorType = 'websensor';
+                    return;
+                } catch (_) {
+                    targetSource = 'deviceorientationabsolute';
+                }
+            }
+
+            // Standard Android DeviceOrientation Binding
+            const isAbsolute = (targetSource === 'deviceorientationabsolute');
+            const eventName = isAbsolute ? 'deviceorientationabsolute' : 'deviceorientation';
+            const label = isAbsolute ? 'Android 절대 9축' : 'Android 방향센서';
+
+            activeEventName = eventName;
+            activeHandler = function(event) {
+                if (thisTicket !== currentSensorSessionId) return;
+                if (event.alpha === null && event.beta === null && event.gamma === null) return;
+
+                let targetYaw = state.yaw;
+                if (typeof event.webkitCompassHeading === 'number') {
+                    targetYaw = event.webkitCompassHeading;
+                } else if (typeof event.alpha === 'number') {
+                    targetYaw = (360 - event.alpha) % 360;
+                }
+
+                // Standard W3C Device Orientation: flat on desk = beta 0, gamma 0
+                let targetPitch = (typeof event.beta === 'number') ? event.beta : state.pitch;
+                let targetRoll = (typeof event.gamma === 'number') ? event.gamma : state.roll;
+
+                applyCleanSensorReading(thisTicket, label, targetYaw, targetPitch, targetRoll);
+            };
+
+            window.addEventListener(eventName, activeHandler, true);
+            state.activeSensorType = targetSource;
+        }
+
+        btnSensorConnect.addEventListener('click', async () => {
+            try {
+                if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                    const permission = await DeviceOrientationEvent.requestPermission();
+                    if (permission === 'granted') {
+                        bindExclusiveSensor(state.userSelectedSource);
+                    } else {
+                        setDiagnosticStatus('권한 거부됨', 'rose', '센서 접근이 거부되었습니다. 화면 터치 드래그를 이용해주세요.');
+                    }
+                } else {
+                    bindExclusiveSensor(state.userSelectedSource);
+                }
+            } catch (_) {
+                bindExclusiveSensor(state.userSelectedSource);
+            }
+
+            const startCount = state.sensorPackets;
+            setDiagnosticStatus('센서 단독 연결 중...', 'amber', '단일 센서 채널로 연결 중입니다. 폰을 8자로 가볍게 회전시켜 자력계를 정렬해주세요.');
+
+            setTimeout(() => {
+                if (state.sensorPackets === startCount) {
+                    setDiagnosticStatus(
+                        'iframe 센서 차단 감지',
+                        'rose',
+                        '프리뷰 창의 보안 정책으로 인해 센서 이벤트가 차단되었습니다. 화면 중앙의 매트릭스나 3D 구를 손가락으로 드래그하면 스마트폰 회전과 100% 동일하게 부드럽게 조작됩니다.'
+                    );
+                }
+            }, 1000);
+        });
+
+        window.addEventListener('resize', () => {
+            updateSimulation();
+        });
+
+        window.onload = function () {
+            initHapticGrid();
+            syncSlidersToUI();
+            updateSimulation();
+            // Start single exclusive sensor without racing
+            bindExclusiveSensor(state.userSelectedSource);
+        };
+    </script>
 </body>
 </html>
