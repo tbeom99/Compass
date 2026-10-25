@@ -356,25 +356,28 @@
             <section class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl">
                 <div class="flex items-center justify-between mb-3">
                     <div>
-                        <h2 class="text-sm font-bold text-white">3D 지구 기준계 뷰 (지면&middot;자기장 고정 &amp; 폰 회전)</h2>
-                        <p class="text-[11px] text-slate-400">지표면과 자기장은 고정되고, 내 폰(시선)이 공간에서 실시간 회전</p>
+                        <h2 class="text-sm font-bold text-white flex items-center gap-1.5">
+                            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                            1인칭 조종석(HUD) 자기장 탐색 뷰
+                        </h2>
+                        <p class="text-[11px] text-slate-400">내 시선 정면(+Y) 중심 &mdash; 정면 십자선[ + ]에 자기장을 맞추세요</p>
                     </div>
                     <span id="compassHeadingBadge" class="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-700 text-xs mono font-bold text-cyan-400">
-                        방위: 0&deg; (N)
+                        시선: 0&deg; N
                     </span>
                 </div>
 
-                <!-- 3D Vector Canvas -->
-                <div id="sphereTouchArea" class="relative bg-slate-950 rounded-xl border border-slate-800 overflow-hidden h-64 flex items-center justify-center touch-none cursor-grab active:cursor-grabbing">
+                <!-- 3D Vector Canvas (Cockpit HUD) -->
+                <div id="sphereTouchArea" class="relative bg-slate-950 rounded-xl border border-slate-800 overflow-hidden h-72 flex items-center justify-center touch-none cursor-grab active:cursor-grabbing">
                     <canvas id="vector3DCanvas" class="w-full h-full block"></canvas>
-                    <div class="absolute top-2 left-3 right-3 flex justify-between text-[10px] mono text-slate-500 pointer-events-none">
-                        <span>👆 화면 드래그로 폰 회전/기울기 조작</span>
+                    <div class="absolute top-2 left-3 right-3 flex justify-between text-[10px] mono text-slate-400 pointer-events-none">
+                        <span class="text-emerald-400 font-bold">[ + ] 내 시선 정면</span>
                         <span id="sensorSourceLabel" class="text-cyan-400 font-semibold">모드: 터치/슬라이더</span>
                     </div>
                     <div class="absolute bottom-2 left-3 right-3 flex justify-between text-[10px] mono text-slate-400 pointer-events-none">
-                        <span class="text-cyan-400">━━ &plusmn;B&#8407; 자기장 (지구 고정)</span>
-                        <span class="text-amber-400">━━ g&#8407; 중력아래 (고정)</span>
-                        <span class="text-emerald-400">━━ &#128241; 폰 시선 (+Y)</span>
+                        <span class="text-cyan-400">◎ 자북극 축 (땅속 -54&deg;)</span>
+                        <span class="text-fuchsia-400">◎ 적도 축 (하늘 +54&deg;)</span>
+                        <span class="text-amber-400">━ 수평선</span>
                     </div>
                 </div>
 
@@ -1070,6 +1073,11 @@
             ctx.restore();
         }
 
+        /**
+         * First-Person Cockpit HUD (Head-Up Display) Visualizer
+         * Camera is strictly bound to user's sightline (+Y axis of smartphone).
+         * Target: Lock the boresight crosshair onto the magnetic vector.
+         */
         function draw3DVectorHUD(data) {
             const rect = vector3DCanvas.getBoundingClientRect();
             if (rect.width === 0 || rect.height === 0) return;
@@ -1082,246 +1090,270 @@
             const W = rect.width;
             const H = rect.height;
             const cx = W / 2;
-            const cy = H / 2 + 6;
-            const R = Math.min(W, H) * 0.38;
+            const cy = H / 2 + 10;
 
             vec3DCtx.clearRect(0, 0, W, H);
 
-            // Camera Setup: Isometric Earth-Frame View
-            // Theta = -42°: North is upper-right, East is lower-right, South is lower-left, West is upper-left
-            // Phi = 24°: Ground plane looks completely horizontal and stable
-            const theta = deg2rad(-42);
-            const phi = deg2rad(24);
-            const cosT = Math.cos(theta), sinT = Math.sin(theta);
-            const cosP = Math.cos(phi), sinP = Math.sin(phi);
-
-            // World Frame Projection: vx = East (+X), vy = North (+Y), vz = Up (+Z)
-            function projectWorld(vx, vy, vz) {
-                const screenX = cx + R * (vx * cosT - vy * sinT);
-                const screenY = cy - R * (vz * cosP + (vx * sinT + vy * cosT) * sinP);
-                return { x: screenX, y: screenY };
-            }
-
-            // 1. Draw Ground Horizon Disc & Grid (Fixed Earth Plane Z = 0)
+            // Subtle HUD grid background
             vec3DCtx.save();
-            vec3DCtx.fillStyle = 'rgba(15, 23, 42, 0.45)';
-            vec3DCtx.strokeStyle = 'rgba(51, 65, 85, 0.6)';
+            vec3DCtx.strokeStyle = 'rgba(15, 23, 42, 0.7)';
             vec3DCtx.lineWidth = 1;
-            vec3DCtx.beginPath();
-            for (let a = 0; a <= 360; a += 6) {
-                const r = deg2rad(a);
-                const pt = projectWorld(Math.sin(r), Math.cos(r), 0);
-                if (a === 0) vec3DCtx.moveTo(pt.x, pt.y);
-                else vec3DCtx.lineTo(pt.x, pt.y);
+            for (let x = 0; x < W; x += 30) {
+                vec3DCtx.beginPath(); vec3DCtx.moveTo(x, 0); vec3DCtx.lineTo(x, H); vec3DCtx.stroke();
             }
-            vec3DCtx.closePath();
-            vec3DCtx.fill();
-            vec3DCtx.stroke();
-
-            // Ground Cardinal Cross Lines (N-S, E-W)
-            const originPt = projectWorld(0, 0, 0);
-            const nPt = projectWorld(0, 1.15, 0);
-            const sPt = projectWorld(0, -1.05, 0);
-            const ePt = projectWorld(1.05, 0, 0);
-            const wPt = projectWorld(-1.05, 0, 0);
-
-            vec3DCtx.strokeStyle = 'rgba(71, 85, 105, 0.4)';
-            vec3DCtx.setLineDash([3, 3]);
-            vec3DCtx.beginPath();
-            vec3DCtx.moveTo(sPt.x, sPt.y);
-            vec3DCtx.lineTo(nPt.x, nPt.y);
-            vec3DCtx.moveTo(wPt.x, wPt.y);
-            vec3DCtx.lineTo(ePt.x, ePt.y);
-            vec3DCtx.stroke();
-            vec3DCtx.setLineDash([]);
-
-            // Cardinal Labels
-            vec3DCtx.font = 'bold 10px JetBrains Mono, monospace';
-            vec3DCtx.fillStyle = '#38bdf8';
-            vec3DCtx.fillText('N (북)', nPt.x + 4, nPt.y - 2);
-            vec3DCtx.fillStyle = '#64748b';
-            vec3DCtx.fillText('S (남)', sPt.x - 22, sPt.y + 10);
-            vec3DCtx.fillText('E (동)', ePt.x + 4, ePt.y + 4);
-            vec3DCtx.fillText('W (서)', wPt.x - 24, wPt.y - 2);
+            for (let y = 0; y < H; y += 30) {
+                vec3DCtx.beginPath(); vec3DCtx.moveTo(0, y); vec3DCtx.lineTo(W, y); vec3DCtx.stroke();
+            }
             vec3DCtx.restore();
 
-            // 2. Draw Fixed Gravity Vector g (Straight Down along -Z)
-            const gDownPt = projectWorld(0, 0, -1.0);
+            // 1. Artificial Horizon (Attitude Indicator)
+            // Roll and Pitch of horizon drawn relative to phone screen
             vec3DCtx.save();
-            vec3DCtx.strokeStyle = '#fbbf24';
-            vec3DCtx.lineWidth = 2.5;
-            vec3DCtx.beginPath();
-            vec3DCtx.moveTo(originPt.x, originPt.y);
-            vec3DCtx.lineTo(gDownPt.x, gDownPt.y);
-            vec3DCtx.stroke();
-            vec3DCtx.fillStyle = '#fbbf24';
-            vec3DCtx.beginPath();
-            vec3DCtx.arc(gDownPt.x, gDownPt.y, 4, 0, Math.PI * 2);
-            vec3DCtx.fill();
-            vec3DCtx.font = 'bold 9px Inter, sans-serif';
-            vec3DCtx.fillText('중력 g (지면수직)', gDownPt.x + 6, gDownPt.y + 4);
-            vec3DCtx.restore();
-
-            // 3. Draw Fixed Magnetic Axis Vector B (World Frame)
-            // B_world points North (+Y) and dips into the ground (-Z) at dipAngle
-            const effDip = data.effectiveDip;
-            const dipRad = deg2rad(effDip);
-            const bWorldPole = { x: 0, y: Math.cos(dipRad), z: -Math.sin(dipRad) };
-            const bWorldEq = { x: 0, y: -Math.cos(dipRad), z: Math.sin(dipRad) };
-
-            const polePt = projectWorld(bWorldPole.x * 1.25, bWorldPole.y * 1.25, bWorldPole.z * 1.25);
-            const eqPt = projectWorld(bWorldEq.x * 1.1, bWorldEq.y * 1.1, bWorldEq.z * 1.1);
-
-            // Dotted Axis connecting the two ends through origin
-            vec3DCtx.save();
-            vec3DCtx.strokeStyle = 'rgba(34, 211, 238, 0.35)';
-            vec3DCtx.setLineDash([4, 4]);
-            vec3DCtx.beginPath();
-            vec3DCtx.moveTo(eqPt.x, eqPt.y);
-            vec3DCtx.lineTo(polePt.x, polePt.y);
-            vec3DCtx.stroke();
-            vec3DCtx.setLineDash([]);
-
-            // Equatorward Vector (Sky-ward)
-            vec3DCtx.strokeStyle = '#e879f9';
-            vec3DCtx.lineWidth = 3;
-            vec3DCtx.beginPath();
-            vec3DCtx.moveTo(originPt.x, originPt.y);
-            vec3DCtx.lineTo(eqPt.x, eqPt.y);
-            vec3DCtx.stroke();
-            vec3DCtx.fillStyle = '#e879f9';
-            vec3DCtx.beginPath();
-            vec3DCtx.arc(eqPt.x, eqPt.y, 4.5, 0, Math.PI * 2);
-            vec3DCtx.fill();
-            vec3DCtx.font = 'bold 9px Inter, sans-serif';
-            vec3DCtx.fillText(`적도축 (+${Math.round(effDip)}° 하늘)`, eqPt.x + 6, eqPt.y - 2);
-
-            // Poleward Vector (Ground-ward)
-            vec3DCtx.strokeStyle = '#22d3ee';
-            vec3DCtx.lineWidth = 3.5;
-            vec3DCtx.beginPath();
-            vec3DCtx.moveTo(originPt.x, originPt.y);
-            vec3DCtx.lineTo(polePt.x, polePt.y);
-            vec3DCtx.stroke();
-            vec3DCtx.fillStyle = '#22d3ee';
-            vec3DCtx.beginPath();
-            vec3DCtx.arc(polePt.x, polePt.y, 5, 0, Math.PI * 2);
-            vec3DCtx.fill();
-            vec3DCtx.fillText(`자북극 축 (-${Math.round(effDip)}° 지중)`, polePt.x + 7, polePt.y + 4);
-            vec3DCtx.restore();
-
-            // 4. Compute Smartphone 3D Pose in World Frame
-            // Convert Yaw, Pitch, Roll to Phone Forward, Right, Up vectors in World Space
-            const yawRad = deg2rad(state.yaw);
-            const pitchRad = deg2rad(state.pitch);
             const rollRad = deg2rad(state.roll);
+            const pitchRad = deg2rad(state.pitch);
+            
+            // Horizon shifts vertically with pitch (scale: 2.2 px per degree)
+            const horizonOffsetY = -Math.sin(pitchRad) * (H * 0.7);
 
-            // Start: Phone lying flat facing North (+Y), Right is East (+X), Normal is Up (+Z)
-            // Apply Yaw around Z:
-            const f_yaw = { x: Math.sin(yawRad), y: Math.cos(yawRad), z: 0 };
-            const r_yaw = { x: Math.cos(yawRad), y: -Math.sin(yawRad), z: 0 };
-            const u_yaw = { x: 0, y: 0, z: 1 };
+            vec3DCtx.translate(cx, cy + horizonOffsetY);
+            vec3DCtx.rotate(-rollRad);
 
-            // Apply Pitch around Phone Right axis:
-            const cosPch = Math.cos(pitchRad), sinPch = Math.sin(pitchRad);
-            const f_pitch = {
-                x: f_yaw.x * cosPch + u_yaw.x * sinPch,
-                y: f_yaw.y * cosPch + u_yaw.y * sinPch,
-                z: f_yaw.z * cosPch + u_yaw.z * sinPch
-            };
-            const u_pitch = {
-                x: -f_yaw.x * sinPch + u_yaw.x * cosPch,
-                y: -f_yaw.y * sinPch + u_yaw.y * cosPch,
-                z: -f_yaw.z * sinPch + u_yaw.z * cosPch
-            };
-            const r_pitch = r_yaw;
+            // Ground Shade below horizon
+            vec3DCtx.fillStyle = 'rgba(180, 83, 9, 0.08)';
+            vec3DCtx.fillRect(-W * 1.5, 0, W * 3, H * 2);
 
-            // Apply Roll around Phone Forward axis:
-            const cosRl = Math.cos(rollRad), sinRl = Math.sin(rollRad);
-            const r_world = {
-                x: r_pitch.x * cosRl + u_pitch.x * sinRl,
-                y: r_pitch.y * cosRl + u_pitch.y * sinRl,
-                z: r_pitch.z * cosRl + u_pitch.z * sinRl
-            };
-            const u_world = {
-                x: -r_pitch.x * sinRl + u_pitch.x * cosRl,
-                y: -r_pitch.y * sinRl + u_pitch.y * cosRl,
-                z: -r_pitch.z * sinRl + u_pitch.z * cosRl
-            };
-            const f_world = f_pitch; // Forward axis in world
+            // Sky Shade above horizon
+            vec3DCtx.fillStyle = 'rgba(2, 132, 199, 0.08)';
+            vec3DCtx.fillRect(-W * 1.5, -H * 2, W * 3, H * 2);
 
-            // 5. Draw 3D Smartphone Body
-            const phoneLen = 0.55;
-            const phoneWid = 0.30;
-            const cTL = {
-                x: -r_world.x * (phoneWid / 2) + f_world.x * (phoneLen / 2),
-                y: -r_world.y * (phoneWid / 2) + f_world.y * (phoneLen / 2),
-                z: -r_world.z * (phoneWid / 2) + f_world.z * (phoneLen / 2)
-            };
-            const cTR = {
-                x: r_world.x * (phoneWid / 2) + f_world.x * (phoneLen / 2),
-                y: r_world.y * (phoneWid / 2) + f_world.y * (phoneLen / 2),
-                z: r_world.z * (phoneWid / 2) + f_world.z * (phoneLen / 2)
-            };
-            const cBR = {
-                x: r_world.x * (phoneWid / 2) - f_world.x * (phoneLen / 2),
-                y: r_world.y * (phoneWid / 2) - f_world.y * (phoneLen / 2),
-                z: r_world.z * (phoneWid / 2) - f_world.z * (phoneLen / 2)
-            };
-            const cBL = {
-                x: -r_world.x * (phoneWid / 2) - f_world.x * (phoneLen / 2),
-                y: -r_world.y * (phoneWid / 2) - f_world.y * (phoneLen / 2),
-                z: -r_world.z * (phoneWid / 2) - f_world.z * (phoneLen / 2)
-            };
-
-            const pTL = projectWorld(cTL.x, cTL.y, cTL.z);
-            const pTR = projectWorld(cTR.x, cTR.y, cTR.z);
-            const pBR = projectWorld(cBR.x, cBR.y, cBR.z);
-            const pBL = projectWorld(cBL.x, cBL.y, cBL.z);
-
-            vec3DCtx.save();
-            // Phone screen plate
-            vec3DCtx.fillStyle = 'rgba(16, 185, 129, 0.22)';
-            vec3DCtx.strokeStyle = '#10b981';
+            // Main Horizon Line
+            vec3DCtx.strokeStyle = 'rgba(251, 191, 36, 0.85)';
             vec3DCtx.lineWidth = 2;
             vec3DCtx.beginPath();
-            vec3DCtx.moveTo(pTL.x, pTL.y);
-            vec3DCtx.lineTo(pTR.x, pTR.y);
-            vec3DCtx.lineTo(pBR.x, pBR.y);
-            vec3DCtx.lineTo(pBL.x, pBL.y);
-            vec3DCtx.closePath();
-            vec3DCtx.fill();
+            vec3DCtx.moveTo(-W, 0);
+            vec3DCtx.lineTo(W, 0);
             vec3DCtx.stroke();
 
-            // Front Camera Notch (indicates top/forward side of phone)
-            const notchPt = projectWorld(f_world.x * (phoneLen * 0.44), f_world.y * (phoneLen * 0.44), f_world.z * (phoneLen * 0.44));
-            vec3DCtx.fillStyle = '#34d399';
-            vec3DCtx.beginPath();
-            vec3DCtx.arc(notchPt.x, notchPt.y, 2.5, 0, Math.PI * 2);
-            vec3DCtx.fill();
+            // Pitch Ladder Bars (-30°, -15°, +15°, +30°)
+            const ladderScale = 2.0; // px per degree
+            [-45, -30, -15, 15, 30, 45].forEach(deg => {
+                const barY = -deg * ladderScale;
+                const barW = Math.abs(deg) === 30 || Math.abs(deg) === 45 ? 40 : 25;
+                vec3DCtx.strokeStyle = deg > 0 ? 'rgba(56, 189, 248, 0.45)' : 'rgba(251, 191, 36, 0.45)';
+                vec3DCtx.lineWidth = 1;
+                vec3DCtx.beginPath();
+                vec3DCtx.moveTo(-barW, barY);
+                vec3DCtx.lineTo(barW, barY);
+                vec3DCtx.stroke();
 
-            // 6. Draw Phone Forward Sightline Arrow (+Y Front Camera)
-            const arrowTip = {
-                x: f_world.x * 1.05,
-                y: f_world.y * 1.05,
-                z: f_world.z * 1.05
-            };
-            const pTip = projectWorld(arrowTip.x, arrowTip.y, arrowTip.z);
+                vec3DCtx.font = '8px JetBrains Mono, monospace';
+                vec3DCtx.fillStyle = deg > 0 ? 'rgba(56, 189, 248, 0.7)' : 'rgba(251, 191, 36, 0.7)';
+                vec3DCtx.fillText(`${deg > 0 ? '+' : ''}${deg}°`, barW + 4, barY + 3);
+            });
+            vec3DCtx.restore();
 
-            vec3DCtx.strokeStyle = '#10b981';
-            vec3DCtx.lineWidth = 3;
+            // 2. Cockpit Bore-Sight Crosshair (Locked at Center [ + ])
+            vec3DCtx.save();
+            vec3DCtx.strokeStyle = 'rgba(16, 185, 129, 0.9)';
+            vec3DCtx.lineWidth = 2;
+
+            // Center Ring & Reticle
             vec3DCtx.beginPath();
-            vec3DCtx.moveTo(originPt.x, originPt.y);
-            vec3DCtx.lineTo(pTip.x, pTip.y);
+            vec3DCtx.arc(cx, cy, 20, 0, Math.PI * 2);
             vec3DCtx.stroke();
 
+            vec3DCtx.beginPath();
+            // Left wing
+            vec3DCtx.moveTo(cx - 32, cy); vec3DCtx.lineTo(cx - 10, cy);
+            // Right wing
+            vec3DCtx.moveTo(cx + 10, cy); vec3DCtx.lineTo(cx + 32, cy);
+            // Top pip
+            vec3DCtx.moveTo(cx, cy - 32); vec3DCtx.lineTo(cx, cy - 10);
+            // Bottom pip
+            vec3DCtx.moveTo(cx, cy + 10); vec3DCtx.lineTo(cx, cy + 24);
+            vec3DCtx.stroke();
+
+            // Center Dot
             vec3DCtx.fillStyle = '#10b981';
             vec3DCtx.beginPath();
-            vec3DCtx.arc(pTip.x, pTip.y, 4.5, 0, Math.PI * 2);
+            vec3DCtx.arc(cx, cy, 2.5, 0, Math.PI * 2);
             vec3DCtx.fill();
-            vec3DCtx.font = 'bold 10px JetBrains Mono, monospace';
-            vec3DCtx.fillText('시선/폰(+Y)', pTip.x + 6, pTip.y - 4);
+
+            vec3DCtx.font = 'bold 9px JetBrains Mono, monospace';
+            vec3DCtx.fillStyle = '#34d399';
+            vec3DCtx.fillText('시선 정면 (+Y)', cx + 24, cy - 12);
             vec3DCtx.restore();
+
+            // 3. Top Heading Compass Tape
+            vec3DCtx.save();
+            const tapeY = 22;
+            vec3DCtx.fillStyle = 'rgba(2, 6, 23, 0.85)';
+            vec3DCtx.fillRect(cx - 110, tapeY - 14, 220, 26);
+            vec3DCtx.strokeStyle = 'rgba(51, 65, 85, 0.9)';
+            vec3DCtx.lineWidth = 1;
+            vec3DCtx.strokeRect(cx - 110, tapeY - 14, 220, 26);
+
+            // Center Indicator Triangle
+            vec3DCtx.fillStyle = '#38bdf8';
+            vec3DCtx.beginPath();
+            vec3DCtx.moveTo(cx, tapeY + 11);
+            vec3DCtx.lineTo(cx - 4, tapeY + 5);
+            vec3DCtx.lineTo(cx + 4, tapeY + 5);
+            vec3DCtx.closePath();
+            vec3DCtx.fill();
+
+            // Ticks & Cardinal labels
+            const normYaw = ((Math.round(state.yaw) % 360) + 360) % 360;
+            const pxPerDeg = 2.0;
+            for (let deg = normYaw - 50; deg <= normYaw + 50; deg += 5) {
+                const angle = ((deg % 360) + 360) % 360;
+                const offset = (deg - normYaw) * pxPerDeg;
+                const tickX = cx + offset;
+                if (tickX < cx - 100 || tickX > cx + 100) continue;
+
+                const isMajor = angle % 45 === 0;
+                const isMinor = angle % 15 === 0;
+
+                vec3DCtx.strokeStyle = isMajor ? '#38bdf8' : isMinor ? '#94a3b8' : '#334155';
+                vec3DCtx.lineWidth = isMajor ? 1.5 : 1;
+                vec3DCtx.beginPath();
+                vec3DCtx.moveTo(tickX, tapeY + 4);
+                vec3DCtx.lineTo(tickX, tapeY + (isMajor ? -6 : isMinor ? -3 : 0));
+                vec3DCtx.stroke();
+
+                if (isMajor) {
+                    const label = angle === 0 ? 'N' : angle === 45 ? 'NE' : angle === 90 ? 'E' : angle === 135 ? 'SE' : angle === 180 ? 'S' : angle === 225 ? 'SW' : angle === 270 ? 'W' : 'NW';
+                    vec3DCtx.font = 'bold 9px JetBrains Mono, monospace';
+                    vec3DCtx.fillStyle = angle === 0 ? '#38bdf8' : '#e2e8f0';
+                    vec3DCtx.textAlign = 'center';
+                    vec3DCtx.fillText(label, tickX, tapeY - 4);
+                }
+            }
+            vec3DCtx.restore();
+
+            // 4. Project 3D Vector into 1st-Person Sightline Field of View
+            // Body frame: +Y = Forward (depth), +X = Right (screen X), +Z = Up (screen -Y)
+            function projectToHUD(v) {
+                const fov = 160; // Field of view scaling
+                // If in front of user (y > 0)
+                if (v.y > 0.05) {
+                    const screenX = cx + (v.x / (v.y + 0.35)) * fov;
+                    const screenY = cy - (v.z / (v.y + 0.35)) * fov;
+                    const inScreen = (screenX >= 25 && screenX <= W - 25 && screenY >= 35 && screenY <= H - 25);
+                    return { x: screenX, y: screenY, isFront: true, inScreen };
+                } else {
+                    // Behind user: pin to edge to point direction
+                    const angle = Math.atan2(-v.z, v.x);
+                    const edgeR = Math.min(W, H) * 0.44;
+                    return {
+                        x: cx + Math.cos(angle) * edgeR,
+                        y: cy + Math.sin(angle) * edgeR,
+                        isFront: false,
+                        inScreen: false
+                    };
+                }
+            }
+
+            // Draw Target Reticles
+            function drawTargetSymbol(proj, vec, color, label, isPoleward) {
+                vec3DCtx.save();
+
+                if (proj.isFront && proj.inScreen) {
+                    // In-view target box
+                    const distToCenter = Math.hypot(proj.x - cx, proj.y - cy);
+                    const isLocked = distToCenter < 24;
+
+                    vec3DCtx.strokeStyle = isLocked ? '#10b981' : color;
+                    vec3DCtx.lineWidth = isLocked ? 3 : 2;
+
+                    // Diamond / Circle Target Reticle
+                    vec3DCtx.beginPath();
+                    vec3DCtx.arc(proj.x, proj.y, isLocked ? 18 : 14, 0, Math.PI * 2);
+                    vec3DCtx.stroke();
+
+                    // Corner brackets
+                    const bSize = 8;
+                    const r = isLocked ? 20 : 16;
+                    vec3DCtx.beginPath();
+                    vec3DCtx.moveTo(proj.x - r, proj.y - r + bSize); vec3DCtx.lineTo(proj.x - r, proj.y - r); vec3DCtx.lineTo(proj.x - r + bSize, proj.y - r);
+                    vec3DCtx.moveTo(proj.x + r - bSize, proj.y - r); vec3DCtx.lineTo(proj.x + r, proj.y - r); vec3DCtx.lineTo(proj.x + r, proj.y - r + bSize);
+                    vec3DCtx.moveTo(proj.x - r, proj.y + r - bSize); vec3DCtx.lineTo(proj.x - r, proj.y + r); vec3DCtx.lineTo(proj.x - r + bSize, proj.y + r);
+                    vec3DCtx.moveTo(proj.x + r - bSize, proj.y + r); vec3DCtx.lineTo(proj.x + r, proj.y + r); vec3DCtx.lineTo(proj.x + r, proj.y + r - bSize);
+                    vec3DCtx.stroke();
+
+                    // Connecting guide line from center boresight to target
+                    vec3DCtx.strokeStyle = isLocked ? 'rgba(16, 185, 129, 0.4)' : `${color}44`;
+                    vec3DCtx.setLineDash([4, 4]);
+                    vec3DCtx.beginPath();
+                    vec3DCtx.moveTo(cx, cy);
+                    vec3DCtx.lineTo(proj.x, proj.y);
+                    vec3DCtx.stroke();
+                    vec3DCtx.setLineDash([]);
+
+                    // Center dot
+                    vec3DCtx.fillStyle = color;
+                    vec3DCtx.beginPath();
+                    vec3DCtx.arc(proj.x, proj.y, 3, 0, Math.PI * 2);
+                    vec3DCtx.fill();
+
+                    // Label Box
+                    vec3DCtx.font = 'bold 10px JetBrains Mono, monospace';
+                    const txt = isLocked ? `🎯 ${label} LOCKED` : label;
+                    vec3DCtx.fillStyle = 'rgba(2, 6, 23, 0.85)';
+                    const tw = vec3DCtx.measureText(txt).width + 8;
+                    vec3DCtx.fillRect(proj.x - tw / 2, proj.y + 20, tw, 15);
+                    vec3DCtx.strokeStyle = color;
+                    vec3DCtx.lineWidth = 1;
+                    vec3DCtx.strokeRect(proj.x - tw / 2, proj.y + 20, tw, 15);
+
+                    vec3DCtx.fillStyle = isLocked ? '#34d399' : color;
+                    vec3DCtx.textAlign = 'center';
+                    vec3DCtx.fillText(txt, proj.x, proj.y + 31);
+
+                } else {
+                    // Off-screen Arrow Indicator (Behind user or out of view)
+                    vec3DCtx.fillStyle = `${color}cc`;
+                    vec3DCtx.strokeStyle = color;
+                    vec3DCtx.lineWidth = 1.5;
+
+                    const arrowAngle = Math.atan2(proj.y - cy, proj.x - cx);
+                    vec3DCtx.save();
+                    vec3DCtx.translate(proj.x, proj.y);
+                    vec3DCtx.rotate(arrowAngle);
+
+                    // Pulsing arrow head pointing outward
+                    vec3DCtx.beginPath();
+                    vec3DCtx.moveTo(10, 0);
+                    vec3DCtx.lineTo(-8, -7);
+                    vec3DCtx.lineTo(-4, 0);
+                    vec3DCtx.lineTo(-8, 7);
+                    vec3DCtx.closePath();
+                    vec3DCtx.fill();
+                    vec3DCtx.stroke();
+
+                    vec3DCtx.restore();
+
+                    // Text near arrow
+                    vec3DCtx.font = 'bold 9px JetBrains Mono, monospace';
+                    vec3DCtx.fillStyle = color;
+                    vec3DCtx.textAlign = proj.x > cx ? 'right' : 'left';
+                    vec3DCtx.fillText(`${label} (등 뒤)`, proj.x > cx ? proj.x - 14 : proj.x + 14, proj.y + 4);
+                }
+
+                vec3DCtx.restore();
+            }
+
+            // Draw Poleward Vector (Down into earth)
+            const poleVec = state.polarityBlind ? data.polewardVec : data.B_body;
+            const pProj = projectToHUD(poleVec);
+            drawTargetSymbol(pProj, poleVec, '#22d3ee', '자북극 축 (땅속)', true);
+
+            // Draw Equatorward Vector (Up into sky)
+            if (state.polarityBlind) {
+                const eqVec = data.equatorwardVec;
+                const eProj = projectToHUD(eqVec);
+                drawTargetSymbol(eProj, eqVec, '#e879f9', '적도 축 (하늘)', false);
+            }
         }
 
         function updateTelemetryUI(data) {
