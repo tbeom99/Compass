@@ -62,8 +62,8 @@
                 <button id="btnSensor" class="px-3 py-1.5 rounded-md text-xs font-medium border border-neutral-300 hover:border-neutral-400 bg-white text-neutral-800 transition active:scale-95 shadow-sm">
                     <span id="sensorStatusText">센서 시작</span>
                 </button>
-                <button id="btnVibrate" class="px-2.5 py-1.5 rounded-md text-xs font-medium border border-neutral-200 hover:bg-neutral-100 text-neutral-600 transition">
-                    진동 ON
+                <button id="btnVibrate" class="px-2.5 py-1.5 rounded-md text-xs font-medium border border-neutral-900 bg-neutral-900 text-white transition active:scale-95">
+                    소나 진동 ON
                 </button>
             </div>
         </div>
@@ -84,9 +84,9 @@
                 </div>
             </div>
             <div class="text-right">
-                <div class="text-xs text-neutral-400 uppercase tracking-wider font-medium">Axial Resonance</div>
-                <div id="txtResonance" class="text-xl font-semibold text-neutral-900 mt-0.5 mono">
-                    34%
+                <div class="text-xs text-neutral-400 uppercase tracking-wider font-medium">Blind Haptic Sonar</div>
+                <div id="txtResonance" class="text-sm sm:text-base font-semibold text-neutral-900 mt-0.5 mono">
+                    대기 중
                 </div>
             </div>
         </div>
@@ -104,7 +104,7 @@
                     하늘: 흰색 / 지면: 검은색
                 </div>
                 <div class="absolute bottom-3 left-4 text-[11px] font-mono text-neutral-500 pointer-events-none">
-                    ● 자북극 지면 관통점 (-54°)
+                    ● 자기장 관통축 (양축 대칭)
                 </div>
                 <div class="absolute bottom-3 right-4 text-[11px] font-mono text-neutral-400 pointer-events-none">
                     드래그하여 시선 회전
@@ -122,10 +122,10 @@
             <div class="flex items-center justify-between border-b border-neutral-200 pb-4">
                 <div>
                     <div class="text-xs font-semibold text-neutral-900">생물학적 양축 모드 (B&#8407; &equiv; &minus;B&#8407; 극성 맹목성)</div>
-                    <div class="text-xs text-neutral-400 mt-0.5">자기장 관통축의 양 끝점 중 검은색 지표면(아래)에 맺히는 점이 자북극, 흰색 하늘(위)에 맺히는 점이 적도 방향입니다.</div>
+                    <div class="text-xs text-neutral-400 mt-0.5">두 자기장 관통축(N/S)은 진동과 표식이 완전히 동일합니다. 오직 검은색 지면(아래)과 흰색 하늘(위)의 위치로만 극방향을 판별합니다.</div>
                 </div>
                 <span class="px-2.5 py-1 rounded text-[11px] font-mono font-medium bg-neutral-100 text-neutral-600 border border-neutral-200 shrink-0">
-                    양축 고정
+                    양축 무구별
                 </span>
             </div>
 
@@ -156,7 +156,7 @@
                     <input id="sliderPitch" type="range" min="-180" max="180" step="1" value="0" class="w-full">
                     <div class="flex justify-between text-[10px] text-neutral-400 mt-1 mono">
                         <span>-90° (바닥)</span>
-                        <button type="button" onclick="alignMagneticAxis()" class="text-neutral-900 font-semibold underline underline-offset-2">★ -54° 축 정렬</button>
+                        <button id="btnAlignAxis" type="button" onclick="alignMagneticAxis()" class="text-neutral-900 font-semibold underline underline-offset-2">★ 지면 축 정렬</button>
                         <span>0° (세움)</span>
                         <span>+90° (하늘)</span>
                     </div>
@@ -165,13 +165,13 @@
                 <!-- Roll -->
                 <div>
                     <div class="flex justify-between text-xs mb-1.5">
-                        <span class="text-neutral-600 font-medium">3. 좌우 기울기 (Roll)</span>
+                        <span class="text-neutral-600 font-medium">3. 화면 수평 기울기 (Horizon Level Roll)</span>
                         <span id="valRoll" class="mono font-semibold text-neutral-900">0°</span>
                     </div>
                     <input id="sliderRoll" type="range" min="-180" max="180" step="1" value="0" class="w-full">
                     <div class="flex justify-between text-[10px] text-neutral-400 mt-1 mono">
                         <span>-90°</span>
-                        <span>0° (수평)</span>
+                        <button type="button" onclick="state.roll=0; syncSliders(); update();" class="hover:text-neutral-900 underline">0° (수평 고정)</button>
                         <span>+90°</span>
                     </div>
                 </div>
@@ -205,8 +205,8 @@
     <script>
         /**
          * Minimal Inclination Compass (Plain Monochrome Aesthetic)
-         * - True 3D Pinhole Camera Projection for Horizon, Sky/Ground half-spaces, and Magnetic Axes
-         * - Eliminates fake 2D grid & sine-wave oscillation bugs on full 360° rotation
+         * - Horizon-Stabilized 3D Gimbal Free Camera (Fixes Yaw-induced Roll coupling & Gimbal Lock jump)
+         * - Blind Bio-Sonar Haptic Engine (Geiger-counter proximity + Heartbeat vs Double-Tap gravity texture)
          */
 
         const state = {
@@ -214,10 +214,12 @@
             pitch: 0,
             roll: 0,
             dipAngle: 54,
-            filterAlpha: 0.20,
+            filterAlpha: 0.25,
             vibrateEnabled: true,
-            lastVibrateTime: 0,
-            sensorActive: false
+            sensorActive: false,
+            // Continuous 3D Camera Forward Vector (eliminates Euler Gimbal Lock jump)
+            camForward: { x: 0, y: 1, z: 0 },
+            useVectorSensor: false
         };
 
         let currentSensorSessionId = 0;
@@ -226,8 +228,7 @@
         const rad2deg = r => r * 180 / Math.PI;
 
         function wrapAngle180(angle) {
-            let a = ((angle + 180) % 360 + 360) % 360 - 180;
-            return a;
+            return ((angle + 180) % 360 + 360) % 360 - 180;
         }
 
         function normalize(v) {
@@ -239,70 +240,181 @@
             return a.x * b.x + a.y * b.y + a.z * b.z;
         }
 
-        function triggerVibration(duration = 35) {
+        function cross(a, b) {
+            return {
+                x: a.y * b.z - a.z * b.y,
+                y: a.z * b.x - a.x * b.z,
+                z: a.x * b.y - a.y * b.x
+            };
+        }
+
+        function triggerVibration(pattern) {
             if (!state.vibrateEnabled) return;
             if (typeof navigator !== 'undefined' && navigator.vibrate) {
-                try { navigator.vibrate(duration); } catch (_) {}
+                try { navigator.vibrate(pattern); } catch (_) {}
             }
         }
 
         /**
-         * True 3D World-to-Body Coordinate Transformation
-         * World Frame: +Y = North, +X = East, +Z = Up (Sky), -Z = Down (Ground/Gravity)
-         * Body Frame (Camera): +Y = Forward Sightline, +X = Right, +Z = Up on screen
+         * Exact W3C DeviceOrientation (alpha, beta, gamma) to World 3D Basis Matrix
+         * Completely eliminates Euler Gimbal Lock when tilting phone and turning around!
+         * World Frame: +X = East, +Y = North, +Z = Up (Sky)
          */
-        function worldToBodyVec(v, yawDeg, pitchDeg, rollDeg) {
-            const yawRad = deg2rad(yawDeg);
-            const pitchRad = deg2rad(pitchDeg);
-            const rollRad = deg2rad(rollDeg);
+        function getCameraForwardFromW3CEuler(alphaDeg, betaDeg, gammaDeg) {
+            const a = deg2rad(alphaDeg || 0);
+            const b = deg2rad(betaDeg || 0);
+            const g = deg2rad(gammaDeg || 0);
 
-            // 1. Yaw around World Z
-            const cosY = Math.cos(yawRad), sinY = Math.sin(yawRad);
-            const x1 = v.x * cosY - v.y * sinY;
-            const y1 = v.x * sinY + v.y * cosY;
-            const z1 = v.z;
+            const cA = Math.cos(a), sA = Math.sin(a);
+            const cB = Math.cos(b), sB = Math.sin(b);
+            const cG = Math.cos(g), sG = Math.sin(g);
 
-            // 2. Pitch around Body X
-            const cosP = Math.cos(pitchRad), sinP = Math.sin(pitchRad);
-            const x2 = x1;
-            const y2 = y1 * cosP + z1 * sinP;
-            const z2 = -y1 * sinP + z1 * cosP;
+            // Device -Z axis in World coordinates (Rear Camera Optical Axis)
+            // Derived from standard Z-X'-Y'' intrinsic rotation matrix R = Rz(alpha)*Rx(beta)*Ry(gamma)
+            const fx = -(cA * sG + sA * sB * cG);
+            const fy = -(-sA * sG + cA * sB * cG);
+            const fz = -(cB * cG);
 
-            // 3. Roll around Body Y (Sightline)
-            const cosR = Math.cos(rollRad), sinR = Math.sin(rollRad);
-            const x3 = x2 * cosR - z2 * sinR;
-            const y3 = y2;
-            const z3 = x2 * sinR + z2 * cosR;
+            return normalize({ x: fx, y: fy, z: fz });
+        }
 
-            return { x: x3, y: y3, z: z3 };
+        /**
+         * Horizon-Stabilized 3D Orthonormal Camera Basis
+         * Fixes the issue where rotating Yaw while pitched causes the 3D view to Roll sideways!
+         * Constructs a rock-solid camera basis from Forward Sightline (F), World Up, and user Roll.
+         */
+        function getCameraBasis() {
+            let F;
+            if (state.useVectorSensor) {
+                F = normalize(state.camForward);
+            } else {
+                const yawRad = deg2rad(state.yaw);
+                const pitchRad = deg2rad(state.pitch);
+                const cosP = Math.cos(pitchRad);
+                F = normalize({
+                    x: cosP * Math.sin(yawRad),
+                    y: cosP * Math.cos(yawRad),
+                    z: Math.sin(pitchRad)
+                });
+            }
+
+            // World Up vector (+Z is Sky)
+            const worldUp = { x: 0, y: 0, z: 1 };
+
+            // Handle pitch beyond +-90 deg (upside-down sightline) smoothly
+            const pitchCos = Math.cos(deg2rad(state.pitch));
+            const upSign = (!state.useVectorSensor && pitchCos < 0) ? -1 : 1;
+            const refUp = { x: 0, y: 0, z: upSign };
+
+            // Right vector R0 = F x refUp (Always strictly parallel to the World Horizon!)
+            let R0 = cross(F, refUp);
+            const rLen = Math.hypot(R0.x, R0.y, R0.z);
+            if (rLen < 1e-4) {
+                // Looking straight at Zenith or Nadir: use Yaw to keep horizon orientation continuous
+                const yawRad = deg2rad(state.yaw);
+                R0 = { x: Math.cos(yawRad), y: -Math.sin(yawRad), z: 0 };
+            } else {
+                R0 = { x: R0.x / rLen, y: R0.y / rLen, z: R0.z / rLen };
+            }
+
+            // Camera Up vector U0 = R0 x F (Always points toward the Sky perpendicular to F)
+            const U0 = normalize(cross(R0, F));
+
+            // Apply pure Roll rotation around the Forward sightline axis F
+            const rollRad = deg2rad(state.roll);
+            const cosR = Math.cos(rollRad);
+            const sinR = Math.sin(rollRad);
+
+            const R = {
+                x: R0.x * cosR + U0.x * sinR,
+                y: R0.y * cosR + U0.y * sinR,
+                z: R0.z * cosR + U0.z * sinR
+            };
+            const U = {
+                x: -R0.x * sinR + U0.x * cosR,
+                y: -R0.y * sinR + U0.y * cosR,
+                z: -R0.z * sinR + U0.z * cosR
+            };
+
+            return { R, F, U };
+        }
+
+        function worldToBodyVec(v, basis) {
+            const b = basis || getCameraBasis();
+            return {
+                x: dot(v, b.R), // Camera Right (+X)
+                y: dot(v, b.F), // Camera Forward Sightline (+Y)
+                z: dot(v, b.U)  // Camera Up on screen (+Z)
+            };
         }
 
         function computeFieldVectors() {
+            const basis = getCameraBasis();
             const dipRad = deg2rad(state.dipAngle);
-            // Magnetic vector in World Frame (pointing North and dipping downward by dipAngle)
+
+            // Magnetic vector in World Frame (pointing North +Y and dipping downward -Z by dipAngle)
             const B_world = normalize({
                 x: 0,
                 y: Math.cos(dipRad),
                 z: -Math.sin(dipRad)
             });
-            // Gravity vector in World Frame (pointing straight down into Earth)
+            // Gravity vector in World Frame (pointing straight down into Earth -Z)
             const g_world = { x: 0, y: 0, z: -1 };
 
-            const B_body = normalize(worldToBodyVec(B_world, state.yaw, state.pitch, state.roll));
-            const g_body = normalize(worldToBodyVec(g_world, state.yaw, state.pitch, state.roll));
+            const B_body = normalize(worldToBodyVec(B_world, basis));
+            const g_body = normalize(worldToBodyVec(g_world, basis));
 
             // Radical-pair mechanism is polarity-blind: senses both +B and -B
             const axisEnd1 = B_body;
             const axisEnd2 = { x: -B_body.x, y: -B_body.y, z: -B_body.z };
 
             // The end that points into the ground (dot with gravity >= 0) is ALWAYS the Poleward (North) axis.
-            // The end that points into the sky (dot with gravity < 0) is ALWAYS the Equatorward (South/Sky) axis.
             const dotG1 = dot(axisEnd1, g_body);
             const polewardVec = (dotG1 >= 0) ? axisEnd1 : axisEnd2;
             const equatorwardVec = (dotG1 >= 0) ? axisEnd2 : axisEnd1;
 
-            return { B_body, g_body, polewardVec, equatorwardVec };
+            return { basis, B_body, g_body, polewardVec, equatorwardVec };
         }
+
+        /**
+         * ============================================================================
+         * POLARITY-BLIND TRIGONOMETRIC HAPTIC ENGINE (B ≡ -B)
+         * ============================================================================
+         * - Completely indistinguishable between N-axis and S-axis.
+         * - Pulse interval modulates smoothly via a trigonometric function (cos²θ)
+         *   from 2000ms (at θ = 90° perpendicular) down to 115ms (at θ = 0° aligned).
+         */
+        const hapticSonar = {
+            lastPulseTime: 0,
+            latestData: null
+        };
+
+        function runBlindHapticSonarLoop(now) {
+            requestAnimationFrame(runBlindHapticSonarLoop);
+            if (!state.vibrateEnabled || !hapticSonar.latestData) return;
+
+            const data = hapticSonar.latestData;
+
+            // Polarity-blind alignment: |cos(θ)| = |dot(Sightline, B)|
+            // Complete symmetry between +B (North axis) and -B (South axis)
+            const absCosTheta = Math.max(0, Math.min(1, Math.abs(data.B_body.y)));
+
+            // Trigonometric modulation factor: cos²(θ) ranges from 0.0 (90° off-axis) to 1.0 (0° on-axis)
+            const trigFactor = absCosTheta * absCosTheta;
+
+            // Slowest period = 2000ms (2s), Fastest period = 115ms (current fastest speed)
+            const maxPeriod = 2000;
+            const minPeriod = 115;
+            const interval = Math.round(maxPeriod - trigFactor * (maxPeriod - minPeriod));
+
+            if (now - hapticSonar.lastPulseTime >= interval) {
+                hapticSonar.lastPulseTime = now;
+                // Identical single pulse for both axes
+                const pulseDuration = Math.round(20 + trigFactor * 35);
+                triggerVibration(pulseDuration);
+            }
+        }
+        requestAnimationFrame(runBlindHapticSonarLoop);
 
         // DOM elements
         const hudCanvas = document.getElementById('hudCanvas');
@@ -335,7 +447,8 @@
          * Since this is a linear inequality in (px, py), the true 3D horizon on screen is an exact straight line,
          * and handles 360-degree pitch/roll/inverted orientations without ever oscillating or flipping!
          */
-        function drawTrue3DHorizonAndSkyGround(W, H, cx, cy, f, g_body) {
+        function drawTrue3DHorizonAndSkyGround(W, H, cx, cy, f, data) {
+            const g_body = data.g_body;
             const gx = g_body.x;
             const gy = g_body.y;
             const gz = g_body.z;
@@ -397,7 +510,7 @@
                 const azRad = deg2rad(az);
                 // Point on World Horizon (z = 0)
                 const worldPt = { x: Math.sin(azRad), y: Math.cos(azRad), z: 0 };
-                const bodyPt = worldToBodyVec(worldPt, state.yaw, state.pitch, state.roll);
+                const bodyPt = worldToBodyVec(worldPt, data.basis);
                 const proj = project3D(bodyPt, cx, cy, f);
 
                 if (!proj.visible || proj.x < -40 || proj.x > W + 40 || proj.y < -40 || proj.y > H + 40) continue;
@@ -459,7 +572,7 @@
             const focalLength = W * 0.68;
 
             // 1. Render True 3D Sky (White), Ground (Black), and Rotating Horizon Landmarks
-            drawTrue3DHorizonAndSkyGround(W, H, cx, cy, focalLength, data.g_body);
+            drawTrue3DHorizonAndSkyGround(W, H, cx, cy, focalLength, data);
 
             // 2. Render Nadir (직하방 - 발아래 땅 끝) & Zenith (천정 - 머리 위 하늘 끝) markers
             const nadirProj = project3D(data.g_body, cx, cy, focalLength);
@@ -493,80 +606,58 @@
                 ctx.restore();
             }
 
-            // 3. Render Both Biological Magnetic Axis Endpoints (Poleward on Ground, Equatorward on Sky)
+            // 3. Render Both Biological Magnetic Axis Endpoints Identically (Indistinguishable N and S)
             const pTarget = project3D(data.polewardVec, cx, cy, focalLength);
             const eqTarget = project3D(data.equatorwardVec, cx, cy, focalLength);
 
-            // 3A. Poleward Axis (Always inside the Black Ground region)
-            if (pTarget.visible) {
+            function drawIdenticalAxisTarget(target) {
+                if (!target.visible) return;
                 ctx.save();
-                const distToCenter = Math.hypot(pTarget.x - cx, pTarget.y - cy);
+                const distToCenter = Math.hypot(target.x - cx, target.y - cy);
                 const isLocked = distToCenter < 24;
 
-                // Since Poleward is ALWAYS on the black ground (dot(poleward, g) >= 0), draw in crisp white
-                ctx.strokeStyle = '#ffffff';
+                // Automatically invert ink color based on whether this pixel lies on black ground or white sky
+                const onGround = ((target.x - cx) * data.g_body.x + focalLength * data.g_body.y + (cy - target.y) * data.g_body.z) >= 0;
+                const strokeColor = onGround ? '#ffffff' : '#171717';
+
+                ctx.strokeStyle = strokeColor;
+                ctx.fillStyle = strokeColor;
                 ctx.lineWidth = isLocked ? 2.5 : 1.8;
 
                 // Outer Ring
                 ctx.beginPath();
-                ctx.arc(pTarget.x, pTarget.y, 16, 0, Math.PI * 2);
+                ctx.arc(target.x, target.y, 16, 0, Math.PI * 2);
                 ctx.stroke();
 
                 if (isLocked) {
                     ctx.beginPath();
-                    ctx.arc(pTarget.x, pTarget.y, 22, 0, Math.PI * 2);
+                    ctx.arc(target.x, target.y, 22, 0, Math.PI * 2);
                     ctx.stroke();
                 }
 
                 // Solid Inner Core
-                ctx.fillStyle = '#ffffff';
                 ctx.beginPath();
-                ctx.arc(pTarget.x, pTarget.y, 4, 0, Math.PI * 2);
+                ctx.arc(target.x, target.y, 4, 0, Math.PI * 2);
                 ctx.fill();
 
-                // Label
+                // Identical Polarity-Blind Label
                 ctx.font = '600 11px SFMono-Regular, monospace';
-                ctx.fillStyle = '#ffffff';
-                const label = isLocked ? '● 자북극 축 [정렬됨]' : `● 자북극 축 (지면 아래)`;
-                ctx.fillText(label, pTarget.x + 22, pTarget.y + 4);
+                const label = isLocked ? '● 자기장 축 [정렬됨]' : '● 자기장 축';
+                ctx.fillText(label, target.x + 22, target.y + 4);
                 ctx.restore();
             }
 
-            // 3B. Equatorward Axis (Always inside the White Sky region)
-            if (eqTarget.visible) {
+            drawIdenticalAxisTarget(pTarget);
+            drawIdenticalAxisTarget(eqTarget);
+
+            // 3C. Off-Screen Directional Guide Arrow (points to whichever magnetic axis end is closer)
+            const pInBounds = pTarget.visible && pTarget.x >= 15 && pTarget.x <= W - 15 && pTarget.y >= 15 && pTarget.y <= H - 15;
+            const eqInBounds = eqTarget.visible && eqTarget.x >= 15 && eqTarget.x <= W - 15 && eqTarget.y >= 15 && eqTarget.y <= H - 15;
+            if (!pInBounds && !eqInBounds) {
                 ctx.save();
-                const distToCenter = Math.hypot(eqTarget.x - cx, eqTarget.y - cy);
-                const isLocked = distToCenter < 24;
-
-                // Since Equatorward is ALWAYS on the white sky (dot(equatorward, g) <= 0), draw in dark ink
-                ctx.strokeStyle = '#171717';
-                ctx.setLineDash([4, 3]);
-                ctx.lineWidth = isLocked ? 2.2 : 1.5;
-
-                ctx.beginPath();
-                ctx.arc(eqTarget.x, eqTarget.y, 15, 0, Math.PI * 2);
-                ctx.stroke();
-                ctx.setLineDash([]);
-
-                // Hollow center circle
-                ctx.beginPath();
-                ctx.arc(eqTarget.x, eqTarget.y, 3.5, 0, Math.PI * 2);
-                ctx.stroke();
-
-                ctx.font = '600 11px SFMono-Regular, monospace';
-                ctx.fillStyle = '#171717';
-                const label = isLocked ? '○ 적도 축 [하늘 정렬됨]' : '○ 적도 대칭축 (하늘 위)';
-                ctx.fillText(label, eqTarget.x + 22, eqTarget.y + 4);
-                ctx.restore();
-            }
-
-            // 3C. Off-Screen Directional Guide Arrow (towards Poleward Ground Axis when out of FOV)
-            const poleInBounds = pTarget.visible && pTarget.x >= 15 && pTarget.x <= W - 15 && pTarget.y >= 15 && pTarget.y <= H - 15;
-            if (!poleInBounds) {
-                ctx.save();
-                // Direction in camera X-Z plane towards poleward vector
-                const dirX = data.polewardVec.x;
-                const dirY = -data.polewardVec.z;
+                const nearerVec = (data.polewardVec.y >= data.equatorwardVec.y) ? data.polewardVec : data.equatorwardVec;
+                const dirX = nearerVec.x;
+                const dirY = -nearerVec.z;
                 const len = Math.hypot(dirX, dirY) || 1;
                 const ux = dirX / len;
                 const uy = dirY / len;
@@ -617,26 +708,28 @@
             ctx.fill();
             ctx.restore();
 
-            // 5. Update Telemetry & Resonance
-            const axialCosSq = Math.pow(data.B_body.y, 2);
-            const resonancePct = Math.round(axialCosSq * 100);
-            document.getElementById('txtResonance').textContent = `${resonancePct}%`;
+            // 5. Update Telemetry & Polarity-Blind Sonar Status
+            hapticSonar.latestData = data;
+
+            // Acute angle θ (0° ~ 90°) to the nearest magnetic axis end (N and S are indistinguishable)
+            const absCos = Math.max(0, Math.min(1, Math.abs(data.B_body.y)));
+            const acuteAngleDeg = Math.round(rad2deg(Math.acos(absCos)));
+            const currentInterval = Math.round(2000 - (absCos * absCos) * (2000 - 115));
+
+            const txtResonance = document.getElementById('txtResonance');
+            const lockBadge = document.getElementById('lockBadge');
+
+            if (acuteAngleDeg < 14) {
+                txtResonance.textContent = `● 자기장 축 록온 (${acuteAngleDeg}° · ${currentInterval}ms)`;
+                lockBadge.classList.remove('hidden');
+            } else {
+                txtResonance.textContent = `축 오차 ${acuteAngleDeg}° (주기 ${currentInterval}ms)`;
+                lockBadge.classList.add('hidden');
+            }
 
             const normYaw = ((Math.round(state.yaw) % 360) + 360) % 360;
             const cardinal = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(normYaw / 45) % 8];
             document.getElementById('txtHeading').textContent = `시선: ${String(normYaw).padStart(3, '0')}° ${cardinal}`;
-
-            const lockBadge = document.getElementById('lockBadge');
-            if (axialCosSq > 0.85) {
-                lockBadge.classList.remove('hidden');
-                const now = performance.now();
-                if (now - state.lastVibrateTime > 260) {
-                    state.lastVibrateTime = now;
-                    triggerVibration(40);
-                }
-            } else {
-                lockBadge.classList.add('hidden');
-            }
         }
 
         function update() {
@@ -659,16 +752,19 @@
 
         // Sliders Listeners
         sliderYaw.addEventListener('input', e => {
+            state.useVectorSensor = false;
             state.yaw = parseFloat(e.target.value);
             syncSliders();
             update();
         });
         sliderPitch.addEventListener('input', e => {
+            state.useVectorSensor = false;
             state.pitch = parseFloat(e.target.value);
             syncSliders();
             update();
         });
         sliderRoll.addEventListener('input', e => {
+            state.useVectorSensor = false;
             state.roll = parseFloat(e.target.value);
             syncSliders();
             update();
@@ -686,12 +782,21 @@
         };
 
         window.alignMagneticAxis = function() {
-            state.yaw = 0;
-            state.pitch = -state.dipAngle;
+            state.useVectorSensor = false;
+            // Align with the Poleward (ground-piercing) end of the magnetic axis:
+            // When dipAngle >= 0 (Northern Hemisphere), B dips into the ground at North (Yaw = 0°, Pitch = -dipAngle).
+            // When dipAngle < 0 (Southern Hemisphere), B points up at North and pierces the ground at South (Yaw = 180°, Pitch = +dipAngle).
+            if (state.dipAngle >= 0) {
+                state.yaw = 0;
+                state.pitch = -state.dipAngle;
+            } else {
+                state.yaw = 180;
+                state.pitch = state.dipAngle;
+            }
             state.roll = 0;
             syncSliders();
             update();
-            triggerVibration(60);
+            triggerVibration(55);
         };
 
         // Vibration Toggle Button
@@ -699,12 +804,13 @@
         btnVibrate.addEventListener('click', () => {
             state.vibrateEnabled = !state.vibrateEnabled;
             if (state.vibrateEnabled) {
-                btnVibrate.textContent = '진동 ON';
-                btnVibrate.className = 'px-2.5 py-1.5 rounded-md text-xs font-medium border border-neutral-200 hover:bg-neutral-100 text-neutral-600 transition';
-                triggerVibration(50);
+                btnVibrate.textContent = '소나 진동 ON';
+                btnVibrate.className = 'px-2.5 py-1.5 rounded-md text-xs font-medium border border-neutral-900 bg-neutral-900 text-white transition active:scale-95';
+                triggerVibration(45);
             } else {
-                btnVibrate.textContent = '진동 OFF';
-                btnVibrate.className = 'px-2.5 py-1.5 rounded-md text-xs font-medium border border-neutral-200 bg-neutral-100 text-neutral-400 transition';
+                btnVibrate.textContent = '소나 진동 OFF';
+                btnVibrate.className = 'px-2.5 py-1.5 rounded-md text-xs font-medium border border-neutral-200 bg-neutral-100 text-neutral-400 transition active:scale-95';
+                triggerVibration(0);
             }
         });
 
@@ -715,9 +821,12 @@
 
         hudTouchArea.addEventListener('pointerdown', e => {
             isDragging = true;
+            state.useVectorSensor = false;
             lastX = e.clientX;
             lastY = e.clientY;
             hudTouchArea.setPointerCapture(e.pointerId);
+            // Unlock vibration permission on mobile touch
+            if (state.vibrateEnabled) triggerVibration(10);
         });
 
         hudTouchArea.addEventListener('pointermove', e => {
@@ -770,34 +879,41 @@
                 if (event.alpha === null && event.beta === null) return;
 
                 state.sensorActive = true;
+                state.useVectorSensor = true;
                 sensorStatusText.textContent = '센서 연결됨';
                 btnSensor.className = 'px-3 py-1.5 rounded-md text-xs font-medium border border-neutral-900 bg-neutral-900 text-white transition';
 
-                // Heading (Yaw)
-                let targetYaw = state.yaw;
-                if (typeof event.webkitCompassHeading === 'number') {
-                    targetYaw = event.webkitCompassHeading;
-                } else if (typeof event.alpha === 'number') {
-                    targetYaw = (360 - event.alpha) % 360;
-                }
+                // Compute true 3D forward vector directly from W3C rotation matrix (No Euler Gimbal Lock!)
+                const compassAlpha = (typeof event.webkitCompassHeading === 'number')
+                    ? (360 - event.webkitCompassHeading) % 360
+                    : (event.alpha || 0);
 
-                // Rear-camera offset: Standing upright (beta = 90) -> Pitch = 0
-                let targetPitch = state.pitch;
-                if (typeof event.beta === 'number') {
-                    targetPitch = wrapAngle180(event.beta - 90);
-                }
+                const rawForward = getCameraForwardFromW3CEuler(compassAlpha, event.beta || 0, event.gamma || 0);
 
-                let targetRoll = (typeof event.gamma === 'number') ? wrapAngle180(event.gamma) : state.roll;
-
-                // Circular EMA filter
+                // Smooth 3D vector interpolation (SLERP/NLERP) — completely immune to +-180° angle jumps!
                 const k = state.filterAlpha;
-                state.yaw = smoothHeading(state.yaw, targetYaw, k);
+                state.camForward = normalize({
+                    x: state.camForward.x + (rawForward.x - state.camForward.x) * k,
+                    y: state.camForward.y + (rawForward.y - state.camForward.y) * k,
+                    z: state.camForward.z + (rawForward.z - state.camForward.z) * k
+                });
 
-                let diffPitch = wrapAngle180(targetPitch - state.pitch);
-                if (Math.abs(diffPitch) > 0.2) state.pitch = wrapAngle180(state.pitch + diffPitch * k);
+                // Extract clean Horizon-Stabilized Yaw & Pitch from the smoothed 3D Sightline Vector
+                const horizLen = Math.hypot(state.camForward.x, state.camForward.y);
+                if (horizLen > 0.02) {
+                    state.yaw = (rad2deg(Math.atan2(state.camForward.x, state.camForward.y)) + 360) % 360;
+                }
+                state.pitch = rad2deg(Math.asin(Math.max(-1, Math.min(1, state.camForward.z))));
 
-                let diffRoll = wrapAngle180(targetRoll - state.roll);
-                if (Math.abs(diffRoll) > 0.2) state.roll = wrapAngle180(state.roll + diffRoll * k);
+                // Horizon-relative camera roll (kept 0 unless phone is physically banked around optical axis)
+                const bRad = deg2rad(event.beta || 0);
+                const gRad = deg2rad(event.gamma || 0);
+                // Optical axis bank angle relative to world vertical
+                const targetRoll = rad2deg(Math.atan2(Math.sin(bRad) * Math.sin(gRad), Math.sin(bRad) * Math.cos(gRad)));
+                const diffRoll = wrapAngle180(targetRoll - state.roll);
+                if (Math.abs(diffRoll) > 0.3 && Math.abs(Math.sin(bRad)) > 0.25) {
+                    state.roll = wrapAngle180(state.roll + diffRoll * k);
+                }
 
                 syncSliders();
                 update();
