@@ -421,34 +421,105 @@
          * - Pulse interval modulates smoothly via a trigonometric function (cos²θ)
          *   from 2000ms (at θ = 90° perpendicular) down to 115ms (at θ = 0° aligned).
          */
+        const HAPTIC = {
+            farMin: 60, midMin: 20,          // zone boundaries (deg from magnetic axis)
+            lockIn: 6, lockOut: 9,           // lock zone with hysteresis
+            bullIn: 2.5, bullOut: 4,         // bullseye zone with hysteresis
+            detents: [30, 20, 14, 10, 7],    // inward-only angle clicks
+            rearm: 1.5,
+            renewMs: 350
+        };
+        const HAPTIC_LABELS = { far: '원거리', mid: '접근', near: '근접', lock: '록온', bull: '정중앙' };
+        // Soft continuous buzz: ~60% duty PWM for 400ms
+        const LOCK_PATTERN = Array.from({ length: 20 }, () => [12, 8]).flat();
+        const lerp = (a, b, t) => a + (b - a) * Math.max(0, Math.min(1, t));
+
         const hapticSonar = {
-            lastPulseTime: 0,
-            latestData: null
+            lastPulse: 0,
+            latestData: null,
+            zone: null,
+            zoneLabel: '',
+            locked: false,
+            armed: null
         };
 
+        /**
+         * Zone-based assist haptics (polarity-blind: only the acute angle theta to the field axis matters).
+         * far/mid : single ticks, interval shrinks with theta
+         * near    : double pulse (categorical "close" texture)
+         * lock    : continuous soft buzz,  bull : continuous full buzz
+         * Extras  : inward-only detent clicks, and a firm click when leaving lock.
+         */
         function runBlindHapticSonarLoop(now) {
             requestAnimationFrame(runBlindHapticSonarLoop);
-            if (!state.vibrateEnabled || !hapticSonar.latestData) return;
+            const h = hapticSonar;
+            if (!h.latestData) return;
 
-            const data = hapticSonar.latestData;
+            const absCos = Math.max(0, Math.min(1, Math.abs(h.latestData.B_body.y)));
+            const theta = rad2deg(Math.acos(absCos));
 
-            // Polarity-blind alignment: |cos(θ)| = |dot(Sightline, B)|
-            // Complete symmetry between +B (North axis) and -B (South axis)
-            const absCosTheta = Math.max(0, Math.min(1, Math.abs(data.B_body.y)));
+            const prevZone = h.zone;
+            const wasLock = prevZone === 'lock' || prevZone === 'bull';
+            let zone;
+            if (theta < (prevZone === 'bull' ? HAPTIC.bullOut : HAPTIC.bullIn)) zone = 'bull';
+            else if (theta < (wasLock ? HAPTIC.lockOut : HAPTIC.lockIn)) zone = 'lock';
+            else if (theta < HAPTIC.midMin) zone = 'near';
+            else if (theta < HAPTIC.farMin) zone = 'mid';
+            else zone = 'far';
 
-            // Trigonometric modulation factor: cos²(θ) ranges from 0.0 (90° off-axis) to 1.0 (0° on-axis)
-            const trigFactor = absCosTheta * absCosTheta;
+            const changed = zone !== prevZone;
+            h.zone = zone;
+            h.zoneLabel = HAPTIC_LABELS[zone];
+            h.locked = (zone === 'lock' || zone === 'bull');
 
-            // Slowest period = 2000ms (2s), Fastest period = 115ms (current fastest speed)
-            const maxPeriod = 2000;
-            const minPeriod = 115;
-            const interval = Math.round(maxPeriod - trigFactor * (maxPeriod - minPeriod));
+            // Inward detent clicks (re-arm only after moving back out by `rearm` degrees)
+            let detentFired = false;
+            if (h.armed === null) {
+                h.armed = HAPTIC.detents.map(d => theta > d);
+            } else {
+                HAPTIC.detents.forEach((d, i) => {
+                    if (h.armed[i] && theta <= d) { h.armed[i] = false; detentFired = true; }
+                    else if (!h.armed[i] && theta > d + HAPTIC.rearm) h.armed[i] = true;
+                });
+            }
 
-            if (now - hapticSonar.lastPulseTime >= interval) {
-                hapticSonar.lastPulseTime = now;
-                // Identical single pulse for both axes
-                const pulseDuration = Math.round(20 + trigFactor * 35);
-                triggerVibration(pulseDuration);
+            if (!state.vibrateEnabled) return;
+
+            // Leaving lock: one firm click (also cancels the running buzz)
+            if (changed && wasLock && !h.locked) {
+                triggerVibration(70);
+                h.lastPulse = now;
+                return;
+            }
+            if (detentFired && !h.locked) {
+                triggerVibration(45);
+                h.lastPulse = now;
+                return;
+            }
+
+            if (zone === 'bull' || zone === 'lock') {
+                if (changed || now - h.lastPulse >= HAPTIC.renewMs) {
+                    triggerVibration(zone === 'bull' ? 400 : LOCK_PATTERN);
+                    h.lastPulse = now;
+                }
+                return;
+            }
+
+            let interval, pattern;
+            if (zone === 'far') {
+                interval = 1200; pattern = 25;
+            } else if (zone === 'mid') {
+                const t = (HAPTIC.farMin - theta) / (HAPTIC.farMin - HAPTIC.midMin);
+                interval = lerp(900, 320, t);
+                pattern = Math.round(lerp(25, 40, t));
+            } else {
+                const t = (HAPTIC.midMin - theta) / (HAPTIC.midMin - HAPTIC.lockIn);
+                interval = lerp(320, 190, t);
+                pattern = [35, 45, 35];
+            }
+            if (changed || now - h.lastPulse >= interval) {
+                h.lastPulse = now;
+                triggerVibration(pattern);
             }
         }
         requestAnimationFrame(runBlindHapticSonarLoop);
@@ -751,16 +822,16 @@
             // Acute angle θ (0° ~ 90°) to the nearest magnetic axis end (N and S are indistinguishable)
             const absCos = Math.max(0, Math.min(1, Math.abs(data.B_body.y)));
             const acuteAngleDeg = Math.round(rad2deg(Math.acos(absCos)));
-            const currentInterval = Math.round(2000 - (absCos * absCos) * (2000 - 115));
+            const currentInterval = hapticSonar.zoneLabel || '-';
 
             const txtResonance = document.getElementById('txtResonance');
             const lockBadge = document.getElementById('lockBadge');
 
-            if (acuteAngleDeg < 14) {
-                txtResonance.textContent = `● 자기장 축 록온 (${acuteAngleDeg}° · ${currentInterval}ms)`;
+            if (hapticSonar.locked) {
+                txtResonance.textContent = `● 자기장 축 록온 (${acuteAngleDeg}° · ${currentInterval})`;
                 lockBadge.classList.remove('hidden');
             } else {
-                txtResonance.textContent = `축 오차 ${acuteAngleDeg}° (주기 ${currentInterval}ms)`;
+                txtResonance.textContent = `축 오차 ${acuteAngleDeg}° (주기 ${currentInterval})`;
                 lockBadge.classList.add('hidden');
             }
 
