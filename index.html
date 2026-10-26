@@ -219,6 +219,8 @@
             sensorActive: false,
             // Continuous 3D Camera Forward Vector (eliminates Euler Gimbal Lock jump)
             camForward: { x: 0, y: 1, z: 0 },
+            camRight: { x: 1, y: 0, z: 0 },
+            sensorSeeded: false,
             useVectorSensor: false
         };
 
@@ -272,10 +274,34 @@
             // Device -Z axis in World coordinates (Rear Camera Optical Axis)
             // Derived from standard Z-X'-Y'' intrinsic rotation matrix R = Rz(alpha)*Rx(beta)*Ry(gamma)
             const fx = -(cA * sG + sA * sB * cG);
-            const fy = -(-sA * sG + cA * sB * cG);
+            const fy = cA * sB * cG - sA * sG;
             const fz = -(cB * cG);
 
             return normalize({ x: fx, y: fy, z: fz });
+        }
+
+        /**
+         * Full device orientation from W3C Euler angles: rear-camera Forward (-Z_dev) and screen Right (+X_dev)
+         * expressed in the world frame. Roll is carried by the Right vector itself, so it never needs to be estimated.
+         */
+        function getDeviceAxesFromW3CEuler(alphaDeg, betaDeg, gammaDeg) {
+            const a = deg2rad(alphaDeg || 0);
+            const b = deg2rad(betaDeg || 0);
+            const g = deg2rad(gammaDeg || 0);
+            const cA = Math.cos(a), sA = Math.sin(a);
+            const cB = Math.cos(b), sB = Math.sin(b);
+            const cG = Math.cos(g), sG = Math.sin(g);
+            const F = normalize({
+                x: -(cA * sG + sA * sB * cG),
+                y: cA * sB * cG - sA * sG,
+                z: -(cB * cG)
+            });
+            const R = normalize({
+                x: cA * cG - sA * sB * sG,
+                y: cG * sA + cA * sB * sG,
+                z: -cB * sG
+            });
+            return { F, R };
         }
 
         /**
@@ -284,6 +310,17 @@
          * Constructs a rock-solid camera basis from Forward Sightline (F), World Up, and user Roll.
          */
         function getCameraBasis() {
+            if (state.useVectorSensor) {
+                const Fs = normalize(state.camForward);
+                // Re-orthonormalize the smoothed Right vector against Forward (Gram-Schmidt)
+                const d = dot(state.camRight, Fs);
+                const Rs = normalize({
+                    x: state.camRight.x - Fs.x * d,
+                    y: state.camRight.y - Fs.y * d,
+                    z: state.camRight.z - Fs.z * d
+                });
+                return { R: Rs, F: Fs, U: normalize(cross(Rs, Fs)) };
+            }
             let F;
             if (state.useVectorSensor) {
                 F = normalize(state.camForward);
@@ -865,6 +902,7 @@
 
         function initMobileSensors() {
             currentSensorSessionId++;
+            state.sensorSeeded = false;
             const thisTicket = currentSensorSessionId;
 
             const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
@@ -888,31 +926,33 @@
                     ? (360 - event.webkitCompassHeading) % 360
                     : (event.alpha || 0);
 
-                const rawForward = getCameraForwardFromW3CEuler(compassAlpha, event.beta || 0, event.gamma || 0);
+                const raw = getDeviceAxesFromW3CEuler(compassAlpha, event.beta || 0, event.gamma || 0);
 
-                // Smooth 3D vector interpolation (SLERP/NLERP) — completely immune to +-180° angle jumps!
-                const k = state.filterAlpha;
+                // Smooth Forward and Right vectors together (vector lerp has no +-180° wrap-around jumps)
+                const k = state.sensorSeeded ? state.filterAlpha : 1;
+                state.sensorSeeded = true;
                 state.camForward = normalize({
-                    x: state.camForward.x + (rawForward.x - state.camForward.x) * k,
-                    y: state.camForward.y + (rawForward.y - state.camForward.y) * k,
-                    z: state.camForward.z + (rawForward.z - state.camForward.z) * k
+                    x: state.camForward.x + (raw.F.x - state.camForward.x) * k,
+                    y: state.camForward.y + (raw.F.y - state.camForward.y) * k,
+                    z: state.camForward.z + (raw.F.z - state.camForward.z) * k
+                });
+                state.camRight = normalize({
+                    x: state.camRight.x + (raw.R.x - state.camRight.x) * k,
+                    y: state.camRight.y + (raw.R.y - state.camRight.y) * k,
+                    z: state.camRight.z + (raw.R.z - state.camRight.z) * k
                 });
 
-                // Extract clean Horizon-Stabilized Yaw & Pitch from the smoothed 3D Sightline Vector
-                const horizLen = Math.hypot(state.camForward.x, state.camForward.y);
+                // Derive yaw / pitch / roll only for the readouts (rendering uses the vectors directly)
+                const F = state.camForward;
+                const horizLen = Math.hypot(F.x, F.y);
                 if (horizLen > 0.02) {
-                    state.yaw = (rad2deg(Math.atan2(state.camForward.x, state.camForward.y)) + 360) % 360;
+                    state.yaw = (rad2deg(Math.atan2(F.x, F.y)) + 360) % 360;
                 }
-                state.pitch = rad2deg(Math.asin(Math.max(-1, Math.min(1, state.camForward.z))));
-
-                // Horizon-relative camera roll (kept 0 unless phone is physically banked around optical axis)
-                const bRad = deg2rad(event.beta || 0);
-                const gRad = deg2rad(event.gamma || 0);
-                // Optical axis bank angle relative to world vertical
-                const targetRoll = rad2deg(Math.atan2(Math.sin(bRad) * Math.sin(gRad), Math.sin(bRad) * Math.cos(gRad)));
-                const diffRoll = wrapAngle180(targetRoll - state.roll);
-                if (Math.abs(diffRoll) > 0.3 && Math.abs(Math.sin(bRad)) > 0.25) {
-                    state.roll = wrapAngle180(state.roll + diffRoll * k);
+                state.pitch = rad2deg(Math.asin(Math.max(-1, Math.min(1, F.z))));
+                if (horizLen > 0.05) {
+                    const R0 = normalize(cross(F, { x: 0, y: 0, z: 1 }));
+                    const U0 = cross(R0, F);
+                    state.roll = rad2deg(Math.atan2(dot(state.camRight, U0), dot(state.camRight, R0)));
                 }
 
                 syncSliders();
