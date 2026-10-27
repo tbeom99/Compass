@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>자기장 Z축 진동</title>
+<style>
+  :root {
+    --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --track: #e7e5e4; --accent: #0d9488; --over: #dc2626;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #0c0a09; --fg: #f5f5f4; --muted: #a8a29e; --track: #292524; --accent: #2dd4bf; --over: #f87171; }
+  }
+  :root[data-theme="dark"] { --bg: #0c0a09; --fg: #f5f5f4; --muted: #a8a29e; --track: #292524; --accent: #2dd4bf; --over: #f87171; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--fg); font-family: system-ui, -apple-system, "Noto Sans KR", sans-serif;
+         display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; padding: 24px; box-sizing: border-box; }
+  .label { color: var(--muted); font-size: 14px; letter-spacing: .04em; }
+  .value { font-size: 88px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+  .value.over { color: var(--over); }
+  .unit { font-size: 24px; color: var(--muted); margin-left: 6px; font-weight: 400; }
+  .bar { width: min(420px, 100%); height: 14px; background: var(--track); border-radius: 7px; overflow: hidden; }
+  .fill { height: 100%; width: 0; background: var(--accent); }
+  .over + .bar .fill, .bar.over .fill { background: var(--over); }
+  button { font: inherit; font-size: 18px; padding: 14px 40px; border-radius: 999px; border: 1px solid var(--muted);
+           background: transparent; color: var(--fg); cursor: pointer; }
+  button.on { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .foot { color: var(--muted); font-size: 12px; text-align: center; min-height: 1.4em; }
+</style>
+</head>
+<body>
+  <div class="label">자기장 Z축 |Bz|</div>
+  <div><span class="value" id="val">0.0</span><span class="unit">µT</span></div>
+  <div class="bar" id="bar"><div class="fill" id="fill"></div></div>
+  <button id="btn">시작</button>
+  <div class="foot" id="foot">진동 세기 = |Bz| ÷ 50 µT, 50 초과 시 최대</div>
+
+<script>
+  // ---- Tunables ----
+  const B_MAX = 50;          // µT at which vibration reaches full strength (readings above it saturate)
+  const CYCLE_MS = 30;       // PWM cycle length used to emulate intensity
+  const WINDOW_CYCLES = 4;   // cycles per vibrate() call
+  const RENEW_MS = 110;      // re-issue interval (a bit shorter than the window)
+  const MIN_ON_MS = 4;       // on-time below this is too short for the motor, treated as off
+  const EARTH = { B: 50, inclDeg: 53 }; // fallback model only
+
+  const $ = id => document.getElementById(id);
+  let bz = 0, source = '', running = false, lastIssue = 0, vibing = false, magSensor = null, oriEvent = '';
+
+  const rad = d => d * Math.PI / 180;
+
+  // ---- Sensor source 1: real magnetometer (device frame, Z = out of screen) ----
+  function tryMagnetometer() {
+    if (!('Magnetometer' in window)) return Promise.resolve(false);
+    return new Promise(resolve => {
+      let settled = false;
+      const done = ok => { if (!settled) { settled = true; resolve(ok); } };
+      try {
+        const m = new Magnetometer({ frequency: 30 });
+        m.addEventListener('reading', () => { bz = Math.abs(m.z); source = '실측'; done(true); });
+        m.addEventListener('error', () => done(false));
+        m.start();
+        magSensor = m;
+        setTimeout(() => { if (!settled) { try { m.stop(); } catch (e) {} done(false); } }, 1500);
+      } catch (e) { done(false); }
+    });
+  }
+
+  // ---- Sensor source 2: estimate from orientation + Earth field model (no disturbances) ----
+  function onOrientation(e) {
+    if (e.alpha == null) return;
+    const alpha = e.webkitCompassHeading != null ? 360 - e.webkitCompassHeading : e.alpha;
+    const a = rad(alpha), b = rad(e.beta || 0), g = rad(e.gamma || 0);
+    const Bh = EARTH.B * Math.cos(rad(EARTH.inclDeg));
+    const Bv = EARTH.B * Math.sin(rad(EARTH.inclDeg));
+    // Device Z axis in world (E, N, Up) dotted with field (0, Bh, -Bv)
+    const z = Bh * (Math.sin(a) * Math.sin(g) - Math.cos(a) * Math.cos(g) * Math.sin(b)) - Bv * Math.cos(b) * Math.cos(g);
+    bz = Math.abs(z); source = '추정';
+  }
+  function startEstimate() {
+    oriEvent = ('ondeviceorientationabsolute' in window) ? 'deviceorientationabsolute' : 'deviceorientation';
+    window.addEventListener(oriEvent, onOrientation, true);
+  }
+
+  async function start() {
+    running = true;
+    $('btn').textContent = '정지'; $('btn').classList.add('on');
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      try { await DeviceOrientationEvent.requestPermission(); } catch (e) {}
+    }
+    if (!(await tryMagnetometer())) startEstimate();
+  }
+  function stop() {
+    running = false;
+    $('btn').textContent = '시작'; $('btn').classList.remove('on');
+    try { if (magSensor) magSensor.stop(); } catch (e) {}
+    magSensor = null;
+    if (oriEvent) window.removeEventListener(oriEvent, onOrientation, true);
+    if (navigator.vibrate) navigator.vibrate(0);
+    vibing = false; bz = 0; source = '';
+  }
+  $('btn').addEventListener('click', () => running ? stop() : start());
+
+  // ---- Haptics: duty cycle proportional to |Bz| / B_MAX ----
+  function haptics(now) {
+    if (now - lastIssue < RENEW_MS || !navigator.vibrate) return;
+    lastIssue = now;
+    const on = Math.round(Math.min(1, bz / B_MAX) * CYCLE_MS);
+    if (on < MIN_ON_MS) { if (vibing) { navigator.vibrate(0); vibing = false; } return; }
+    vibing = true;
+    if (on >= CYCLE_MS) { navigator.vibrate(RENEW_MS + 20); return; }
+    const p = [];
+    for (let i = 0; i < WINDOW_CYCLES; i++) p.push(on, CYCLE_MS - on);
+    navigator.vibrate(p);
+  }
+
+  function frame(now) {
+    requestAnimationFrame(frame);
+    const over = bz > B_MAX;
+    $('val').textContent = bz.toFixed(1);
+    $('val').classList.toggle('over', over);
+    $('bar').classList.toggle('over', over);
+    $('fill').style.width = Math.min(100, bz / B_MAX * 100) + '%';
+    $('foot').textContent = running && source
+      ? '센서: ' + source + (over ? ' · 범위 초과(최대 진동)' : '')
+      : '진동 세기 = |Bz| ÷ 50 µT, 50 초과 시 최대';
+    if (running) haptics(now);
+  }
+  requestAnimationFrame(frame);
+</script>
+</body>
+</html>
