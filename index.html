@@ -425,70 +425,52 @@
          * - Pulse interval modulates smoothly via a trigonometric function (cos²θ)
          *   from 2000ms (at θ = 90° perpendicular) down to 115ms (at θ = 0° aligned).
          */
-        // Avian receptor response (Figure 3: triplet yield vs theta, symmetric about 90deg), digitized by eye.
-        // [theta deg, normalized response 0..1]; minimum at the field axis, peak near 68deg, shallow dip at 90deg.
+        // P = closeness to the field axis, 0..1 (1 on the axis, 0 at 90deg), polarity-blind via the acute angle theta.
+        // Weber-Fechner: perception ~ log(stimulus), so every channel is geometric in P
+        // (stimulus = min * (max/min)^P) and equal steps of P feel like equal steps.
         const HAPTIC = {
-            curve: [[0,0],[10,0.02],[20,0.10],[30,0.25],[38,0.46],[46,0.68],[56,0.90],[64,0.99],[68,1],[76,0.93],[84,0.82],[90,0.78]],
-            poleIn: 8, poleOut: 11,      // marker-tick cone around the axis (deg, with hysteresis)
-            tickMs: 600, tickLen: 25,
-            cycleMs: 30, windowCycles: 4, renewMs: 110, minOnMs: 4
+            poleIn: 8, poleOut: 11,          // on-axis cone with hysteresis (deg)
+            tMax: 1100, tMin: 130,           // tick interval at P=0 / P=1 (ms)
+            pulseMin: 15, pulseMax: 60,      // tick length at P=0 / P=1 (ms)
+            fMin: 110, octaves: 1,           // tone pitch: 110Hz, +1 octave (220Hz) at P=1
+            gMin: 0.02, gMax: 0.25           // tone gain at P=0 / P=1
         };
+        const geo = (min, max, p) => min * Math.pow(max / min, p);
         function hapticResponse(theta) {
-            const c = HAPTIC.curve;
-            for (let i = 1; i < c.length; i++) {
-                if (theta <= c[i][0]) return c[i - 1][1] + (c[i][1] - c[i - 1][1]) * (theta - c[i - 1][0]) / (c[i][0] - c[i - 1][0]);
-            }
-            return c[c.length - 1][1];
+            return Math.max(0, Math.min(1, 1 - theta / 90));
         }
 
-        const hapticSonar = {
-            lastPulse: 0,
-            lastTick: 0,
-            latestData: null,
-            zoneLabel: '',
-            locked: false,
-            vibing: false
-        };
+        const hapticSonar = { latestData: null, zoneLabel: '', locked: false, phase: 1, last: 0 };
 
         /**
-         * Response-curve haptics (polarity-blind: acute angle theta between sightline and field axis).
-         * Vibration strength (PWM duty) follows the receptor curve: silent near the axis, strongest ~68deg.
-         * Inside the silent cone a slow single tick marks "on axis" so silence is not ambiguous.
+         * Weber-Fechner haptics. Tick rate, tick length, pitch and loudness all scale geometrically with the
+         * receptor response P(theta), and never fall to zero (floor = slowest, faintest tick) so "on axis"
+         * is never confused with "off". Inside the on-axis cone each tick becomes a double tick.
+         * A phase accumulator lets the rate change smoothly while the phone moves.
          */
         function runBlindHapticSonarLoop(now) {
             requestAnimationFrame(runBlindHapticSonarLoop);
             const h = hapticSonar;
             if (!h.latestData) return;
 
+            const dt = h.last ? Math.min(100, now - h.last) : 0;
+            h.last = now;
+
             const absCos = Math.max(0, Math.min(1, Math.abs(h.latestData.B_body.y)));
             const theta = rad2deg(Math.acos(absCos));
-            const level = hapticResponse(theta);
+            const P = hapticResponse(theta);
 
             h.locked = theta < (h.locked ? HAPTIC.poleOut : HAPTIC.poleIn);
-            h.zoneLabel = '응답 ' + Math.round(level * 100) + '%';
-            updateSound(level, now);
+            h.zoneLabel = '근접도 ' + Math.round(P * 100) + '%';
+            updateSound(P, now);
 
             if (!state.vibrateEnabled) return;
-            if (now - h.lastPulse < HAPTIC.renewMs) return;
-            h.lastPulse = now;
-
-            const on = Math.round(level * HAPTIC.cycleMs);
-            if (on < HAPTIC.minOnMs) {
-                if (h.locked && now - h.lastTick >= HAPTIC.tickMs) {
-                    h.lastTick = now;
-                    triggerVibration(HAPTIC.tickLen);
-                    h.vibing = true;
-                } else if (h.vibing && !h.locked) {
-                    triggerVibration(0);
-                    h.vibing = false;
-                }
-                return;
+            h.phase += dt / geo(HAPTIC.tMax, HAPTIC.tMin, P);
+            if (h.phase >= 1) {
+                h.phase = h.phase > 2 ? 0 : h.phase - 1;
+                const d = Math.round(geo(HAPTIC.pulseMin, HAPTIC.pulseMax, P));
+                triggerVibration(h.locked ? [d, 50, d] : d);
             }
-            h.vibing = true;
-            if (on >= HAPTIC.cycleMs) { triggerVibration(HAPTIC.renewMs + 20); return; }
-            const pattern = [];
-            for (let i = 0; i < HAPTIC.windowCycles; i++) pattern.push(on, HAPTIC.cycleMs - on);
-            triggerVibration(pattern);
         }
         requestAnimationFrame(runBlindHapticSonarLoop);
 
@@ -953,7 +935,7 @@
         }
 
         // ---- Sound: tone level/pitch follow the response curve, blip marks the on-axis cone ----
-        const audio = { ctx: null, osc: null, gain: null, lastBlip: 0 };
+        const audio = { ctx: null, osc: null, gain: null };
         function ensureAudio() {
             if (!audio.ctx) {
                 const AC = window.AudioContext || window.webkitAudioContext;
@@ -969,24 +951,12 @@
             }
             if (audio.ctx.state !== 'running') audio.ctx.resume();
         }
-        function audioBlip() {
-            const t = audio.ctx.currentTime;
-            const o = audio.ctx.createOscillator();
-            const g = audio.ctx.createGain();
-            o.frequency.value = 1200;
-            g.gain.setValueAtTime(0, t);
-            g.gain.linearRampToValueAtTime(0.2, t + 0.01);
-            g.gain.linearRampToValueAtTime(0, t + 0.07);
-            o.connect(g); g.connect(audio.ctx.destination);
-            o.start(t); o.stop(t + 0.08);
-        }
-        function updateSound(level, now) {
+        function updateSound(p, now) {
             if (!audio.ctx) return;
             const t = audio.ctx.currentTime;
             if (!state.soundEnabled) { audio.gain.gain.setTargetAtTime(0, t, 0.05); return; }
-            audio.osc.frequency.setTargetAtTime(220 + 480 * level, t, 0.04);
-            audio.gain.gain.setTargetAtTime(level < 0.1 ? 0 : 0.05 + 0.25 * level, t, 0.04);
-            if (hapticSonar.locked && now - audio.lastBlip >= HAPTIC.tickMs) { audio.lastBlip = now; audioBlip(); }
+            audio.osc.frequency.setTargetAtTime(HAPTIC.fMin * Math.pow(2, HAPTIC.octaves * p), t, 0.04);
+            audio.gain.gain.setTargetAtTime(geo(HAPTIC.gMin, HAPTIC.gMax, p), t, 0.04);
         }
         document.addEventListener('pointerdown', () => { if (state.soundEnabled) ensureAudio(); });
 
