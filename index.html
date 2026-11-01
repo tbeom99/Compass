@@ -65,6 +65,9 @@
                 <button id="btnVibrate" class="px-2.5 py-1.5 rounded-md text-xs font-medium border border-neutral-900 bg-neutral-900 text-white transition active:scale-95">
                     소나 진동 ON
                 </button>
+                <button id="btnSound" class="px-2.5 py-1.5 rounded-md text-xs font-medium border border-neutral-900 bg-neutral-900 text-white transition active:scale-95">
+                    소리 ON
+                </button>
             </div>
         </div>
     </header>
@@ -216,6 +219,7 @@
             dipAngle: 54,
             filterAlpha: 0.25,
             vibrateEnabled: true,
+            soundEnabled: true,
             sensorActive: false,
             // Continuous 3D Camera Forward Vector (eliminates Euler Gimbal Lock jump)
             camForward: { x: 0, y: 1, z: 0 },
@@ -421,34 +425,35 @@
          * - Pulse interval modulates smoothly via a trigonometric function (cos²θ)
          *   from 2000ms (at θ = 90° perpendicular) down to 115ms (at θ = 0° aligned).
          */
+        // Avian receptor response (Figure 3: triplet yield vs theta, symmetric about 90deg), digitized by eye.
+        // [theta deg, normalized response 0..1]; minimum at the field axis, peak near 68deg, shallow dip at 90deg.
         const HAPTIC = {
-            farMin: 60, midMin: 20,          // zone boundaries (deg from magnetic axis)
-            lockIn: 6, lockOut: 9,           // lock zone with hysteresis
-            bullIn: 2.5, bullOut: 4,         // bullseye zone with hysteresis
-            detents: [30, 20, 14, 10, 7],    // inward-only angle clicks
-            rearm: 1.5,
-            renewMs: 350
+            curve: [[0,0],[10,0.02],[20,0.10],[30,0.25],[38,0.46],[46,0.68],[56,0.90],[64,0.99],[68,1],[76,0.93],[84,0.82],[90,0.78]],
+            poleIn: 8, poleOut: 11,      // marker-tick cone around the axis (deg, with hysteresis)
+            tickMs: 600, tickLen: 25,
+            cycleMs: 30, windowCycles: 4, renewMs: 110, minOnMs: 4
         };
-        const HAPTIC_LABELS = { far: '원거리', mid: '접근', near: '근접', lock: '록온', bull: '정중앙' };
-        // Soft continuous buzz: ~60% duty PWM for 400ms
-        const LOCK_PATTERN = Array.from({ length: 20 }, () => [12, 8]).flat();
-        const lerp = (a, b, t) => a + (b - a) * Math.max(0, Math.min(1, t));
+        function hapticResponse(theta) {
+            const c = HAPTIC.curve;
+            for (let i = 1; i < c.length; i++) {
+                if (theta <= c[i][0]) return c[i - 1][1] + (c[i][1] - c[i - 1][1]) * (theta - c[i - 1][0]) / (c[i][0] - c[i - 1][0]);
+            }
+            return c[c.length - 1][1];
+        }
 
         const hapticSonar = {
             lastPulse: 0,
+            lastTick: 0,
             latestData: null,
-            zone: null,
             zoneLabel: '',
             locked: false,
-            armed: null
+            vibing: false
         };
 
         /**
-         * Zone-based assist haptics (polarity-blind: only the acute angle theta to the field axis matters).
-         * far/mid : single ticks, interval shrinks with theta
-         * near    : double pulse (categorical "close" texture)
-         * lock    : continuous soft buzz,  bull : continuous full buzz
-         * Extras  : inward-only detent clicks, and a firm click when leaving lock.
+         * Response-curve haptics (polarity-blind: acute angle theta between sightline and field axis).
+         * Vibration strength (PWM duty) follows the receptor curve: silent near the axis, strongest ~68deg.
+         * Inside the silent cone a slow single tick marks "on axis" so silence is not ambiguous.
          */
         function runBlindHapticSonarLoop(now) {
             requestAnimationFrame(runBlindHapticSonarLoop);
@@ -457,70 +462,33 @@
 
             const absCos = Math.max(0, Math.min(1, Math.abs(h.latestData.B_body.y)));
             const theta = rad2deg(Math.acos(absCos));
+            const level = hapticResponse(theta);
 
-            const prevZone = h.zone;
-            const wasLock = prevZone === 'lock' || prevZone === 'bull';
-            let zone;
-            if (theta < (prevZone === 'bull' ? HAPTIC.bullOut : HAPTIC.bullIn)) zone = 'bull';
-            else if (theta < (wasLock ? HAPTIC.lockOut : HAPTIC.lockIn)) zone = 'lock';
-            else if (theta < HAPTIC.midMin) zone = 'near';
-            else if (theta < HAPTIC.farMin) zone = 'mid';
-            else zone = 'far';
-
-            const changed = zone !== prevZone;
-            h.zone = zone;
-            h.zoneLabel = HAPTIC_LABELS[zone];
-            h.locked = (zone === 'lock' || zone === 'bull');
-
-            // Inward detent clicks (re-arm only after moving back out by `rearm` degrees)
-            let detentFired = false;
-            if (h.armed === null) {
-                h.armed = HAPTIC.detents.map(d => theta > d);
-            } else {
-                HAPTIC.detents.forEach((d, i) => {
-                    if (h.armed[i] && theta <= d) { h.armed[i] = false; detentFired = true; }
-                    else if (!h.armed[i] && theta > d + HAPTIC.rearm) h.armed[i] = true;
-                });
-            }
+            h.locked = theta < (h.locked ? HAPTIC.poleOut : HAPTIC.poleIn);
+            h.zoneLabel = '응답 ' + Math.round(level * 100) + '%';
+            updateSound(level, now);
 
             if (!state.vibrateEnabled) return;
+            if (now - h.lastPulse < HAPTIC.renewMs) return;
+            h.lastPulse = now;
 
-            // Leaving lock: one firm click (also cancels the running buzz)
-            if (changed && wasLock && !h.locked) {
-                triggerVibration(70);
-                h.lastPulse = now;
-                return;
-            }
-            if (detentFired && !h.locked) {
-                triggerVibration(45);
-                h.lastPulse = now;
-                return;
-            }
-
-            if (zone === 'bull' || zone === 'lock') {
-                if (changed || now - h.lastPulse >= HAPTIC.renewMs) {
-                    triggerVibration(zone === 'bull' ? 400 : LOCK_PATTERN);
-                    h.lastPulse = now;
+            const on = Math.round(level * HAPTIC.cycleMs);
+            if (on < HAPTIC.minOnMs) {
+                if (h.locked && now - h.lastTick >= HAPTIC.tickMs) {
+                    h.lastTick = now;
+                    triggerVibration(HAPTIC.tickLen);
+                    h.vibing = true;
+                } else if (h.vibing && !h.locked) {
+                    triggerVibration(0);
+                    h.vibing = false;
                 }
                 return;
             }
-
-            let interval, pattern;
-            if (zone === 'far') {
-                interval = 1200; pattern = 25;
-            } else if (zone === 'mid') {
-                const t = (HAPTIC.farMin - theta) / (HAPTIC.farMin - HAPTIC.midMin);
-                interval = lerp(900, 320, t);
-                pattern = Math.round(lerp(25, 40, t));
-            } else {
-                const t = (HAPTIC.midMin - theta) / (HAPTIC.midMin - HAPTIC.lockIn);
-                interval = lerp(320, 190, t);
-                pattern = [35, 45, 35];
-            }
-            if (changed || now - h.lastPulse >= interval) {
-                h.lastPulse = now;
-                triggerVibration(pattern);
-            }
+            h.vibing = true;
+            if (on >= HAPTIC.cycleMs) { triggerVibration(HAPTIC.renewMs + 20); return; }
+            const pattern = [];
+            for (let i = 0; i < HAPTIC.windowCycles; i++) pattern.push(on, HAPTIC.cycleMs - on);
+            triggerVibration(pattern);
         }
         requestAnimationFrame(runBlindHapticSonarLoop);
 
@@ -831,7 +799,7 @@
                 txtResonance.textContent = `● 자기장 축 록온 (${acuteAngleDeg}° · ${currentInterval})`;
                 lockBadge.classList.remove('hidden');
             } else {
-                txtResonance.textContent = `축 오차 ${acuteAngleDeg}° (주기 ${currentInterval})`;
+                txtResonance.textContent = `축 오차 ${acuteAngleDeg}° (${currentInterval})`;
                 lockBadge.classList.add('hidden');
             }
 
@@ -963,6 +931,65 @@
         const btnSensor = document.getElementById('btnSensor');
         const sensorStatusText = document.getElementById('sensorStatusText');
 
+        // ---- iOS: smooth relative alpha + slowly-estimated north offset (webkitCompassHeading jumps between poses) ----
+        const iosNorth = { c: 1, s: 0, seeded: false };
+        function iosAbsoluteAlpha(event) {
+            const alphaRel = event.alpha || 0, beta = event.beta || 0, gamma = event.gamma || 0;
+            const ax = getDeviceAxesFromW3CEuler(alphaRel, beta, gamma);
+            const b = Math.abs(beta), g = Math.abs(gamma);
+            let axis = null;
+            if (b < 30 && g < 30) axis = normalize(cross(ax.R, ax.F));        // flat: top edge (device Y)
+            else if (b > 60 && b < 120 && g < 30) axis = ax.F;                // upright: back camera
+            if (axis && Math.hypot(axis.x, axis.y) > 0.5) {
+                const headingRel = rad2deg(Math.atan2(axis.x, axis.y));
+                const delta = deg2rad(event.webkitCompassHeading - headingRel);
+                const k = iosNorth.seeded ? 0.05 : 1;
+                iosNorth.c += (Math.cos(delta) - iosNorth.c) * k;
+                iosNorth.s += (Math.sin(delta) - iosNorth.s) * k;
+                iosNorth.seeded = true;
+            }
+            const deltaDeg = rad2deg(Math.atan2(iosNorth.s, iosNorth.c));
+            return ((alphaRel - deltaDeg) % 360 + 360) % 360;
+        }
+
+        // ---- Sound: tone level/pitch follow the response curve, blip marks the on-axis cone ----
+        const audio = { ctx: null, osc: null, gain: null, lastBlip: 0 };
+        function ensureAudio() {
+            if (!audio.ctx) {
+                const AC = window.AudioContext || window.webkitAudioContext;
+                if (!AC) return;
+                audio.ctx = new AC();
+                audio.osc = audio.ctx.createOscillator();
+                audio.gain = audio.ctx.createGain();
+                audio.osc.type = 'sine';
+                audio.gain.gain.value = 0;
+                audio.osc.connect(audio.gain);
+                audio.gain.connect(audio.ctx.destination);
+                audio.osc.start();
+            }
+            if (audio.ctx.state !== 'running') audio.ctx.resume();
+        }
+        function audioBlip() {
+            const t = audio.ctx.currentTime;
+            const o = audio.ctx.createOscillator();
+            const g = audio.ctx.createGain();
+            o.frequency.value = 1200;
+            g.gain.setValueAtTime(0, t);
+            g.gain.linearRampToValueAtTime(0.2, t + 0.01);
+            g.gain.linearRampToValueAtTime(0, t + 0.07);
+            o.connect(g); g.connect(audio.ctx.destination);
+            o.start(t); o.stop(t + 0.08);
+        }
+        function updateSound(level, now) {
+            if (!audio.ctx) return;
+            const t = audio.ctx.currentTime;
+            if (!state.soundEnabled) { audio.gain.gain.setTargetAtTime(0, t, 0.05); return; }
+            audio.osc.frequency.setTargetAtTime(220 + 480 * level, t, 0.04);
+            audio.gain.gain.setTargetAtTime(level < 0.1 ? 0 : 0.05 + 0.25 * level, t, 0.04);
+            if (hapticSonar.locked && now - audio.lastBlip >= HAPTIC.tickMs) { audio.lastBlip = now; audioBlip(); }
+        }
+        document.addEventListener('pointerdown', () => { if (state.soundEnabled) ensureAudio(); });
+
         function smoothHeading(current, target, factor) {
             let diff = (target - current) % 360;
             if (diff > 180) diff -= 360;
@@ -974,6 +1001,7 @@
         function initMobileSensors() {
             currentSensorSessionId++;
             state.sensorSeeded = false;
+            iosNorth.seeded = false;
             const thisTicket = currentSensorSessionId;
 
             const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
@@ -994,7 +1022,7 @@
 
                 // Compute true 3D forward vector directly from W3C rotation matrix (No Euler Gimbal Lock!)
                 const compassAlpha = (typeof event.webkitCompassHeading === 'number')
-                    ? (360 - event.webkitCompassHeading) % 360
+                    ? iosAbsoluteAlpha(event)
                     : (event.alpha || 0);
 
                 const raw = getDeviceAxesFromW3CEuler(compassAlpha, event.beta || 0, event.gamma || 0);
@@ -1044,6 +1072,16 @@
             } else {
                 initMobileSensors();
             }
+        });
+
+        const btnSound = document.getElementById('btnSound');
+        btnSound.addEventListener('click', () => {
+            state.soundEnabled = !state.soundEnabled;
+            if (state.soundEnabled) ensureAudio();
+            btnSound.textContent = state.soundEnabled ? '소리 ON' : '소리 OFF';
+            btnSound.className = state.soundEnabled
+                ? 'px-2.5 py-1.5 rounded-md text-xs font-medium border border-neutral-900 bg-neutral-900 text-white transition active:scale-95'
+                : 'px-2.5 py-1.5 rounded-md text-xs font-medium border border-neutral-200 bg-neutral-100 text-neutral-400 transition active:scale-95';
         });
 
         window.addEventListener('resize', update);
